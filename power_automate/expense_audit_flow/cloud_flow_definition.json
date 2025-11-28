@@ -1,0 +1,412 @@
+{
+  "name": "ExpenseAuditFlow",
+  "type": "Microsoft.Logic/workflows",
+  "location": "japaneast",
+  "kind": "Stateful",
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "siteAddress": {
+        "type": "String",
+        "defaultValue": "https://contoso.sharepoint.com/sites/expenses"
+      },
+      "expenseListName": {
+        "type": "String",
+        "defaultValue": "ExpenseRequests"
+      },
+      "receiptLibrary": {
+        "type": "String",
+        "defaultValue": "Shared Documents"
+      },
+      "formsId": {
+        "type": "String",
+        "defaultValue": "12345678-abcd-1234-abcd-1234567890ab"
+      },
+      "teamsChannelId": {
+        "type": "String",
+        "defaultValue": "19:xxx@thread.tacv2"
+      },
+      "maxAmount": {
+        "type": "Float",
+        "defaultValue": 50000
+      },
+      "duplicateDays": {
+        "type": "Int",
+        "defaultValue": 14
+      },
+      "holidayCheck": {
+        "type": "Bool",
+        "defaultValue": true
+      }
+    },
+    "triggers": {
+      "When_a_new_response_is_submitted": {
+        "type": "OpenApiConnectionWebhook",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_msforms']['connectionId']"
+            }
+          },
+          "body": {
+            "subscriptionRequest": {
+              "notificationUrl": "@{listCallbackUrl()}"
+            }
+          },
+          "path": "/providers/Microsoft.Forms/forms/@{encodeURIComponent(encodeURIComponent(parameters('formsId')))}"
+        }
+      }
+    },
+    "actions": {
+      "Get_response_details": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_msforms']['connectionId']"
+            }
+          },
+          "method": "get",
+          "path": "/providers/Microsoft.Forms/forms/@{encodeURIComponent(encodeURIComponent(parameters('formsId')))}",
+          "queries": {
+            "responseId": "@triggerBody()?['resourceData']?['responseId']"
+          }
+        }
+      },
+      "Create_item": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('expenseListName')))}",
+          "body": {
+            "fields": {
+              "Title": "@body('Get_response_details')?['responderEmail']",
+              "Amount": "@float(body('Get_response_details')?['answers'][0]?['answer'])",
+              "Purpose": "@body('Get_response_details')?['answers'][1]?['answer']",
+              "SpendDate": "@body('Get_response_details')?['answers'][2]?['answer']",
+              "Status": "Pending",
+              "CreatedByEmail": "@body('Get_response_details')?['responderEmail']"
+            }
+          }
+        },
+        "runAfter": {
+          "Get_response_details": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Apply_to_each_receipt": {
+        "type": "Foreach",
+        "foreach": "@body('Get_response_details')?['attachments']",
+        "actions": {
+          "Add_receipt_file": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//files",
+              "body": {
+                "folderPath": "@{concat('/', parameters('receiptLibrary'), '/Receipts/')}",
+                "name": "@item()?['name']",
+                "contentBytes": "@item()?['contentBytes']"
+              }
+            }
+          }
+        },
+        "runAfter": {
+          "Create_item": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Predict_receipt": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_commonaibuilder']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/predict",
+          "body": {
+            "modelId": "prebuilt-receipt",
+            "payload": "@body('Get_response_details')?['attachments']"
+          }
+        },
+        "runAfter": {
+          "Apply_to_each_receipt": [
+            "Succeeded",
+            "Skipped"
+          ]
+        }
+      },
+      "Compose_policy_check": {
+        "type": "Compose",
+        "inputs": {
+          "maxAmount": "@parameters('maxAmount')",
+          "receiptTotal": "@coalesce(body('Predict_receipt')?['predictionOutput']?['total'],0)",
+          "claimedAmount": "@float(body('Get_response_details')?['answers'][0]?['answer'])",
+          "spendDate": "@body('Get_response_details')?['answers'][2]?['answer']",
+          "holidayCheck": "@parameters('holidayCheck')",
+          "duplicateDays": "@parameters('duplicateDays')"
+        },
+        "runAfter": {
+          "Predict_receipt": [
+            "Succeeded",
+            "Failed"
+          ]
+        }
+      },
+      "Condition_policy": {
+        "type": "If",
+        "expression": {
+          "or": [
+            {
+              ">": [
+                "@outputs('Compose_policy_check')['claimedAmount']",
+                "@outputs('Compose_policy_check')['maxAmount']"
+              ]
+            },
+            {
+              ">": [
+                "@outputs('Compose_policy_check')['receiptTotal']",
+                "@outputs('Compose_policy_check')['maxAmount']"
+              ]
+            }
+          ]
+        },
+        "actions": {
+          "Compose_reject_comment": {
+            "type": "Compose",
+            "inputs": "金額上限超過、または領収書の金額が申請値と一致しないため差戻しします。"
+          },
+          "Update_item_rejected": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+                }
+              },
+              "method": "patch",
+              "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('expenseListName')))}",
+              "body": {
+                "fields": {
+                  "ID": "@outputs('Create_item')?['body/Id']",
+                  "Status": "Rejected",
+                  "Comment": "@outputs('Compose_reject_comment')"
+                }
+              }
+            },
+            "runAfter": {
+              "Compose_reject_comment": [
+                "Succeeded"
+              ]
+            }
+          },
+          "Post_Teams_reject": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_teams']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/v3/conversations/@{encodeURIComponent(parameters('teamsChannelId'))}/activities",
+              "body": {
+                "text": "経費申請が差戻しされました。理由: @{outputs('Compose_reject_comment')}",
+                "summary": "Expense rejected"
+              }
+            },
+            "runAfter": {
+              "Update_item_rejected": [
+                "Succeeded"
+              ]
+            }
+          },
+          "Send_email_reject": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/v2/Mail",
+              "body": {
+                "To": "@body('Get_response_details')?['responderEmail']",
+                "Subject": "経費申請差戻しのお知らせ",
+                "Body": "申請が差戻しされました。理由: @{outputs('Compose_reject_comment')}"
+              }
+            },
+            "runAfter": {
+              "Post_Teams_reject": [
+                "Succeeded"
+              ]
+            }
+          }
+        },
+        "else": {
+          "actions": {
+            "Run_desktop_flow": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['shared_rpa']['connectionId']"
+                  }
+                },
+                "method": "post",
+                "path": "/providers/Microsoft.PowerApps/apis/shared_rpa/connections/@{encodeURIComponent(encodeURIComponent(parameters('$connections')['shared_rpa']['connectionId']))}/apim/apimflows",
+                "body": {
+                  "flowName": "ExpenseDesktopFlow",
+                  "inputs": {
+                    "Amount": "@outputs('Compose_policy_check')['claimedAmount']",
+                    "Purpose": "@body('Get_response_details')?['answers'][1]?['answer']",
+                    "SpendDate": "@outputs('Compose_policy_check')['spendDate']",
+                    "Requester": "@body('Get_response_details')?['responderEmail']"
+                  }
+                }
+              }
+            },
+            "Update_item_processed": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "patch",
+                "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('expenseListName')))}",
+                "body": {
+                  "fields": {
+                    "ID": "@outputs('Create_item')?['body/Id']",
+                    "Status": "Processed",
+                    "Comment": "会計システム連携済み",
+                    "DesktopResult": "@body('Run_desktop_flow')"
+                  }
+                }
+              },
+              "runAfter": {
+                "Run_desktop_flow": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              }
+            },
+            "Send_email_processed": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                  }
+                },
+                "method": "post",
+                "path": "/v2/Mail",
+                "body": {
+                  "To": "@body('Get_response_details')?['responderEmail']",
+                  "Subject": "経費申請の処理結果",
+                  "Body": "経費申請が処理されました。結果: @{outputs('Update_item_processed')?['body/Status']}"
+                }
+              },
+              "runAfter": {
+                "Update_item_processed": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              }
+            },
+            "Post_Teams_processed": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['shared_teams']['connectionId']"
+                  }
+                },
+                "method": "post",
+                "path": "/v3/conversations/@{encodeURIComponent(parameters('teamsChannelId'))}/activities",
+                "body": {
+                  "text": "経費申請を会計システムへ連携しました。ID: @{outputs('Create_item')?['body/Id']}",
+                  "summary": "Expense processed"
+                }
+              },
+              "runAfter": {
+                "Send_email_processed": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              }
+            }
+          }
+        },
+        "runAfter": {
+          "Compose_policy_check": [
+            "Succeeded"
+          ]
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "connectionReferences": {
+    "shared_msforms": {
+      "connectionName": "shared_msforms",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_msforms",
+      "apiDefinition": {
+        "name": "shared_msforms"
+      }
+    },
+    "shared_sharepointonline": {
+      "connectionName": "shared_sharepointonline",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "apiDefinition": {
+        "name": "shared_sharepointonline"
+      }
+    },
+    "shared_commonaibuilder": {
+      "connectionName": "shared_commonaibuilder",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_commonaibuilder",
+      "apiDefinition": {
+        "name": "shared_commonaibuilder"
+      }
+    },
+    "shared_office365": {
+      "connectionName": "shared_office365",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "apiDefinition": {
+        "name": "shared_office365"
+      }
+    },
+    "shared_teams": {
+      "connectionName": "shared_teams",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_teams",
+      "apiDefinition": {
+        "name": "shared_teams"
+      }
+    },
+    "shared_rpa": {
+      "connectionName": "shared_rpa",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_rpa",
+      "apiDefinition": {
+        "name": "shared_rpa"
+      }
+    }
+  },
+  "schemaVersion": "1.0"
+}

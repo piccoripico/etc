@@ -1,0 +1,328 @@
+{
+  "name": "ContractApprovalFlow",
+  "type": "Microsoft.Logic/workflows",
+  "location": "japaneast",
+  "kind": "Stateful",
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "siteAddress": {
+        "type": "String",
+        "defaultValue": "https://contoso.sharepoint.com/sites/contracts"
+      },
+      "listName": {
+        "type": "String",
+        "defaultValue": "Contracts"
+      },
+      "documentLibrary": {
+        "type": "String",
+        "defaultValue": "Shared Documents"
+      },
+      "reminderInterval": {
+        "type": "String",
+        "defaultValue": "PT72H"
+      },
+      "maxReminders": {
+        "type": "Int",
+        "defaultValue": 3
+      }
+    },
+    "triggers": {
+      "When_an_item_is_created": {
+        "type": "OpenApiConnectionWebhook",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+            }
+          },
+          "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('listName')))}",
+          "body": {
+            "subscriptionRequest": {
+              "notificationUrl": "@{listCallbackUrl()}"
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Get_item": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+            }
+          },
+          "method": "get",
+          "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('listName')))}//items/@{triggerOutputs()?['body/ID']}",
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {}
+      },
+      "Get_attachments": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+            }
+          },
+          "method": "get",
+          "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('listName')))}//items/@{triggerOutputs()?['body/ID']}/attachments",
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {
+          "Get_item": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Apply_to_each_attachment": {
+        "type": "Foreach",
+        "foreach": "@outputs('Get_attachments')?['body/value']",
+        "actions": {
+          "Get_attachment_content": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+                }
+              },
+              "method": "get",
+              "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('listName')))}//items/@{triggerOutputs()?['body/ID']}/attachments/@{items('Apply_to_each_attachment')?['Id']}/content",
+              "authentication": "@parameters('$authentication')"
+            },
+            "runAfter": {}
+          },
+          "Create_file": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//files",
+              "body": {
+                "folderPath": "@{concat('/', parameters('documentLibrary'), '/Contracts/')}",
+                "name": "@{items('Apply_to_each_attachment')?['Name']}",
+                "contentBytes": "@outputs('Get_attachment_content')?['body']"
+              },
+              "authentication": "@parameters('$authentication')"
+            },
+            "runAfter": {
+              "Get_attachment_content": [
+                "Succeeded"
+              ]
+            }
+          }
+        },
+        "runAfter": {
+          "Get_attachments": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Start_and_wait_for_an_approval": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_approvals']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/approvals/startandwait",
+          "body": {
+            "approvalType": "ApproveReject",
+            "title": "@{concat('【契約承認】', triggerOutputs()?['body/Title'])}",
+            "assignedTo": "@{triggerOutputs()?['body/Approver']}",
+            "details": "@{concat('金額: ', triggerOutputs()?['body/Amount'],'\n依頼者: ', triggerOutputs()?['body/Author/Email'])}",
+            "itemLink": "@{first(body('Apply_to_each_attachment')?['Create_file']?['body']?['Path'])}"
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {
+          "Apply_to_each_attachment": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Reminder_loop": {
+        "type": "Until",
+        "expression": "@equals(actions('Start_and_wait_for_an_approval')?['outputs']?['body/outcome'], 'Approve')",
+        "limit": {
+          "count": "@parameters('maxReminders')",
+          "timeout": "PT7D"
+        },
+        "actions": {
+          "Delay_between_reminders": {
+            "type": "Wait",
+            "inputs": {
+              "interval": "@parameters('reminderInterval')"
+            },
+            "runAfter": {}
+          },
+          "Post_reminder": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_teams']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/v3/conversations/@{encodeURIComponent(triggerOutputs()?['body/Approver'])}/activities",
+              "body": {
+                "rootMessage": {
+                  "messageType": "text",
+                  "text": "@{concat('【リマインド】契約承認が保留中です: ', triggerOutputs()?['body/Title'])}"
+                }
+              },
+              "authentication": "@parameters('$authentication')"
+            },
+            "runAfter": {
+              "Delay_between_reminders": [
+                "Succeeded"
+              ]
+            }
+          }
+        },
+        "runAfter": {
+          "Start_and_wait_for_an_approval": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Update_item_with_result": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+            }
+          },
+          "method": "patch",
+          "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('listName')))}//items/@{triggerOutputs()?['body/ID']}",
+          "body": {
+            "Status": "@{actions('Start_and_wait_for_an_approval')?['outputs']?['body/outcome']}",
+            "ApproverComment": "@{actions('Start_and_wait_for_an_approval')?['outputs']?['body/comments']}",
+            "ApprovedDate": "@{utcNow()}"
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {
+          "Reminder_loop": [
+            "Succeeded",
+            "TimedOut"
+          ]
+        }
+      },
+      "Send_result_mail": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_office365']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/v2/Mail",
+          "body": {
+            "To": "@{triggerOutputs()?['body/Author/Email']}",
+            "Subject": "@{concat('【契約承認結果】', triggerOutputs()?['body/Title'])}",
+            "Body": "@{concat('結果: ', actions('Start_and_wait_for_an_approval')?['outputs']?['body/outcome'], '<br>コメント: ', actions('Start_and_wait_for_an_approval')?['outputs']?['body/comments'])}",
+            "Importance": "Normal"
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {
+          "Update_item_with_result": [
+            "Succeeded"
+          ]
+        }
+      },
+      "If_approved_run_PAD": {
+        "type": "If",
+        "expression": "@equals(actions('Start_and_wait_for_an_approval')?['outputs']?['body/outcome'], 'Approve')",
+        "actions": {
+          "Run_PAD_flow": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_rpa']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/v3/desktopFlows/launch",
+              "body": {
+                "desktopFlowId": "{{replace-with-your-desktop-flow-id}}",
+                "launchParameters": {
+                  "inputs": {
+                    "ContractId": "@{triggerOutputs()?['body/ID']}",
+                    "ContractorName": "@{triggerOutputs()?['body/Contractor']}",
+                    "Amount": "@{triggerOutputs()?['body/Amount']}",
+                    "ApprovedDate": "@{utcNow()}",
+                    "DocumentLink": "@{first(body('Apply_to_each_attachment')?['Create_file']?['body']?['Path'])}"
+                  }
+                }
+              },
+              "authentication": "@parameters('$authentication')"
+            },
+            "runAfter": {}
+          }
+        },
+        "else": {},
+        "runAfter": {
+          "Send_result_mail": [
+            "Succeeded"
+          ]
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "connectionReferences": {
+    "shared_sharepointonline": {
+      "connectionName": "shared_sharepointonline",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "apiDefinition": {
+        "name": "shared_sharepointonline"
+      }
+    },
+    "shared_office365": {
+      "connectionName": "shared_office365",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "apiDefinition": {
+        "name": "shared_office365"
+      }
+    },
+    "shared_approvals": {
+      "connectionName": "shared_approvals",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_approvals",
+      "apiDefinition": {
+        "name": "shared_approvals"
+      }
+    },
+    "shared_teams": {
+      "connectionName": "shared_teams",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_teams",
+      "apiDefinition": {
+        "name": "shared_teams"
+      }
+    },
+    "shared_rpa": {
+      "connectionName": "shared_rpa",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_rpa",
+      "apiDefinition": {
+        "name": "shared_rpa"
+      }
+    }
+  },
+  "schemaVersion": "1.0"
+}

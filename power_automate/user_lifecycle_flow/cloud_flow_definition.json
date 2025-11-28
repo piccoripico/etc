@@ -1,0 +1,388 @@
+{
+  "name": "UserLifecycleFlow",
+  "type": "Microsoft.Logic/workflows",
+  "location": "japaneast",
+  "kind": "Stateful",
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "siteAddress": {
+        "type": "String",
+        "defaultValue": "https://contoso.sharepoint.com/sites/hr"
+      },
+      "requestListName": {
+        "type": "String",
+        "defaultValue": "UserLifecycleRequests"
+      },
+      "teamsChannelId": {
+        "type": "String",
+        "defaultValue": "19:xxx@thread.tacv2"
+      },
+      "defaultLicenses": {
+        "type": "Array",
+        "defaultValue": [
+          "ENTERPRISEPACK"
+        ]
+      },
+      "baseGroups": {
+        "type": "Array",
+        "defaultValue": [
+          "AllEmployees",
+          "SecurityTraining"
+        ]
+      }
+    },
+    "triggers": {
+      "When_an_item_is_created": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_sharepointonline",
+            "operationId": "OnNewItem",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+          },
+          "parameters": {
+            "dataset": "@{parameters('siteAddress')}",
+            "table": "@{parameters('requestListName')}"
+          },
+          "authentication": "@parameters('$authentication')"
+        }
+      }
+    },
+    "actions": {
+      "Get_item": {
+        "runAfter": {},
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_sharepointonline",
+            "operationId": "GetItem",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+          },
+          "parameters": {
+            "dataset": "@{parameters('siteAddress')}",
+            "table": "@{parameters('requestListName')}",
+            "id": "@triggerOutputs()?['body/ID']"
+          },
+          "authentication": "@parameters('$authentication')"
+        }
+      },
+      "Initialize_role_changes": {
+        "runAfter": {
+          "Get_item": [
+            "Succeeded"
+          ]
+        },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "addGroups",
+              "type": "Array",
+              "value": "@parameters('baseGroups')"
+            },
+            {
+              "name": "removeGroups",
+              "type": "Array",
+              "value": []
+            }
+          ]
+        }
+      },
+      "Switch_on_action": {
+        "runAfter": {
+          "Initialize_role_changes": [
+            "Succeeded"
+          ]
+        },
+        "type": "Switch",
+        "expression": "@{triggerOutputs()?['body/Action']}",
+        "cases": {
+          "Join": {
+            "actions": {
+              "Ensure_user": {
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "connectionName": "shared_azuread",
+                    "operationId": "CreateUser",
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_azuread"
+                  },
+                  "parameters": {
+                    "accountEnabled": true,
+                    "displayName": "@{triggerOutputs()?['body/Title']}",
+                    "mailNickname": "@{triggerOutputs()?['body/Alias']}",
+                    "userPrincipalName": "@{triggerOutputs()?['body/UPN']}"
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              },
+              "Assign_license": {
+                "runAfter": {
+                  "Ensure_user": [
+                    "Succeeded",
+                    "Failed"
+                  ]
+                },
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "connectionName": "shared_azuread",
+                    "operationId": "AssignLicense",
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_azuread"
+                  },
+                  "parameters": {
+                    "userId": "@{triggerOutputs()?['body/UPN']}",
+                    "addLicenses": "@parameters('defaultLicenses')",
+                    "removeLicenses": []
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              }
+            }
+          },
+          "Transfer": {
+            "actions": {
+              "Set_transfer_groups": {
+                "type": "SetVariable",
+                "inputs": {
+                  "name": "addGroups",
+                  "value": "@union(variables('addGroups'), split(triggerOutputs()?['body/NewGroups'], ';'))"
+                }
+              },
+              "Set_remove_groups": {
+                "runAfter": {
+                  "Set_transfer_groups": [
+                    "Succeeded"
+                  ]
+                },
+                "type": "SetVariable",
+                "inputs": {
+                  "name": "removeGroups",
+                  "value": "@split(triggerOutputs()?['body/OldGroups'], ';')"
+                }
+              }
+            }
+          },
+          "Leave": {
+            "actions": {
+              "Block_sign_in": {
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "connectionName": "shared_azuread",
+                    "operationId": "UpdateUser",
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_azuread"
+                  },
+                  "parameters": {
+                    "userId": "@{triggerOutputs()?['body/UPN']}",
+                    "accountEnabled": false
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              },
+              "Remove_license": {
+                "runAfter": {
+                  "Block_sign_in": [
+                    "Succeeded",
+                    "Failed"
+                  ]
+                },
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "connectionName": "shared_azuread",
+                    "operationId": "AssignLicense",
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_azuread"
+                  },
+                  "parameters": {
+                    "userId": "@{triggerOutputs()?['body/UPN']}",
+                    "addLicenses": [],
+                    "removeLicenses": "@parameters('defaultLicenses')"
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              },
+              "Mark_remove_groups": {
+                "runAfter": {
+                  "Remove_license": [
+                    "Succeeded",
+                    "Failed"
+                  ]
+                },
+                "type": "SetVariable",
+                "inputs": {
+                  "name": "removeGroups",
+                  "value": "@union(variables('baseGroups'), split(triggerOutputs()?['body/OldGroups'], ';'))"
+                }
+              }
+            }
+          }
+        },
+        "default": {
+          "actions": {}
+        }
+      },
+      "Apply_group_changes": {
+        "runAfter": {
+          "Switch_on_action": [
+            "Succeeded",
+            "Completed",
+            "Failed"
+          ]
+        },
+        "type": "Scope",
+        "actions": {
+          "Add_groups": {
+            "type": "Foreach",
+            "foreach": "@variables('addGroups')",
+            "actions": {
+              "Add_member": {
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "connectionName": "shared_azuread",
+                    "operationId": "AddMemberToGroup",
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_azuread"
+                  },
+                  "parameters": {
+                    "groupId": "@{items('Add_groups')}",
+                    "memberId": "@{triggerOutputs()?['body/UPN']}"
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              }
+            }
+          },
+          "Remove_groups": {
+            "runAfter": {
+              "Add_groups": [
+                "Succeeded",
+                "Completed",
+                "Failed"
+              ]
+            },
+            "type": "Foreach",
+            "foreach": "@variables('removeGroups')",
+            "actions": {
+              "Remove_member": {
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "connectionName": "shared_azuread",
+                    "operationId": "RemoveMemberFromGroup",
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_azuread"
+                  },
+                  "parameters": {
+                    "groupId": "@{items('Remove_groups')}",
+                    "memberId": "@{triggerOutputs()?['body/UPN']}"
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Run_PAD": {
+        "runAfter": {
+          "Apply_group_changes": [
+            "Succeeded",
+            "Failed",
+            "TimedOut"
+          ]
+        },
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_uiflow",
+            "operationId": "Runs_UiFlow",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow"
+          },
+          "parameters": {
+            "flowId": "00000000-0000-0000-0000-000000000000",
+            "trackingId": "@{guid()}",
+            "inputs": {
+              "upn": "@{triggerOutputs()?['body/UPN']}",
+              "displayName": "@{triggerOutputs()?['body/Title']}",
+              "action": "@{triggerOutputs()?['body/Action']}",
+              "newGroups": "@{triggerOutputs()?['body/NewGroups']}",
+              "oldGroups": "@{triggerOutputs()?['body/OldGroups']}"
+            }
+          },
+          "authentication": "@parameters('$authentication')"
+        }
+      },
+      "Post_Teams": {
+        "runAfter": {
+          "Run_PAD": [
+            "Succeeded",
+            "Failed"
+          ]
+        },
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_teams",
+            "operationId": "PostMessageToChannel",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+          },
+          "parameters": {
+            "teamId": "@split(parameters('teamsChannelId'), '/')[0]",
+            "channelId": "@split(parameters('teamsChannelId'), '/')[1]",
+            "message": "@{concat('Lifecycle action: ', triggerOutputs()?['body/Action'], ' for ', triggerOutputs()?['body/Title'], ' completed. PAD result: ', body('Run_PAD')?['status'])}"
+          },
+          "authentication": "@parameters('$authentication')"
+        }
+      },
+      "Send_mail": {
+        "runAfter": {
+          "Post_Teams": [
+            "Succeeded",
+            "Failed"
+          ]
+        },
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_office365",
+            "operationId": "SendEmailV2",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+          },
+          "parameters": {
+            "to": "@{triggerOutputs()?['body/Requester']}",
+            "subject": "@{concat('User lifecycle: ', triggerOutputs()?['body/Action'], ' - ', triggerOutputs()?['body/Title'])}",
+            "body": "@{concat('Teams notification posted. PAD status: ', body('Run_PAD')?['status'], '.')}"
+          },
+          "authentication": "@parameters('$authentication')"
+        }
+      },
+      "Update_item": {
+        "runAfter": {
+          "Send_mail": [
+            "Succeeded",
+            "Failed"
+          ]
+        },
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_sharepointonline",
+            "operationId": "UpdateItem",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+          },
+          "parameters": {
+            "dataset": "@{parameters('siteAddress')}",
+            "table": "@{parameters('requestListName')}",
+            "id": "@triggerOutputs()?['body/ID']",
+            "item/Status": "@{coalesce(body('Run_PAD')?['status'], 'Completed')}",
+            "item/Log": "@{string(body('Run_PAD'))}"
+          },
+          "authentication": "@parameters('$authentication')"
+        }
+      }
+    },
+    "outputs": {}
+  }
+}

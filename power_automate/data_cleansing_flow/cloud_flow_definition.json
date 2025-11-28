@@ -1,0 +1,257 @@
+{
+  "name": "DataCleansingMasterSyncFlow",
+  "type": "Microsoft.Logic/workflows",
+  "location": "japaneast",
+  "kind": "Stateful",
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "siteAddress": {
+        "type": "String",
+        "defaultValue": "https://contoso.sharepoint.com/sites/data"
+      },
+      "sourceListName": {
+        "type": "String",
+        "defaultValue": "MasterCandidates"
+      },
+      "logListName": {
+        "type": "String",
+        "defaultValue": "CleansingLog"
+      },
+      "teamsChannelId": {
+        "type": "String",
+        "defaultValue": "19:xxx@thread.tacv2"
+      },
+      "dedupField": {
+        "type": "String",
+        "defaultValue": "Title"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Day",
+          "interval": 1,
+          "startTime": "2024-01-01T23:00:00Z",
+          "timeZone": "Tokyo Standard Time",
+          "schedule": {
+            "hours": [
+              8
+            ],
+            "minutes": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    "actions": {
+      "Get_items": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_sharepointonline",
+            "operationId": "GetItems",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+          },
+          "parameters": {
+            "dataset": "@parameters('siteAddress')",
+            "table": "@parameters('sourceListName')",
+            "$top": 500
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {}
+      },
+      "Missing_required": {
+        "type": "Query",
+        "inputs": {
+          "from": "@outputs('Get_items')?['body/value']",
+          "where": "@or(equals(item()?['Title'], ''), equals(item()?['Email'], ''), equals(item()?['EffectiveDate'], ''))"
+        },
+        "runAfter": {
+          "Get_items": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Invalid_email": {
+        "type": "Query",
+        "inputs": {
+          "from": "@outputs('Get_items')?['body/value']",
+          "where": "@and(not(equals(item()?['Email'], '')), not(matches(item()?['Email'], '^[\\w-.]+@([\\w-]+\\.)+[\\w-]{2,4}$')))",
+          "select": "@item()"
+        },
+        "runAfter": {
+          "Get_items": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Invalid_date_range": {
+        "type": "Query",
+        "inputs": {
+          "from": "@outputs('Get_items')?['body/value']",
+          "where": "@or(greaterOrEquals(addDays(utcNow(), 1), item()?['EffectiveDate']), greater(subtractFromTime(utcNow(), 5, 'Year'), item()?['EffectiveDate']))"
+        },
+        "runAfter": {
+          "Get_items": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Compose_dedup": {
+        "type": "Compose",
+        "inputs": "@outputs('Get_items')?['body/value']",
+        "runAfter": {
+          "Get_items": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Group_by_key": {
+        "type": "Query",
+        "inputs": {
+          "from": "@outputs('Compose_dedup')",
+          "groupBy": "@item()[parameters('dedupField')]",
+          "select": "@item()"
+        },
+        "runAfter": {
+          "Compose_dedup": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Find_duplicates": {
+        "type": "Query",
+        "inputs": {
+          "from": "@outputs('Group_by_key')",
+          "where": "@greater(length(item()), 1)",
+          "select": "@item()"
+        },
+        "runAfter": {
+          "Group_by_key": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Summary_table": {
+        "type": "Compose",
+        "inputs": "<p>検出結果一覧</p><h4>必須欠損</h4><pre>@{json(string(outputs('Missing_required')))}</pre><h4>メール不備</h4><pre>@{json(string(outputs('Invalid_email')))}</pre><h4>日付異常</h4><pre>@{json(string(outputs('Invalid_date_range')))}</pre><h4>重複候補</h4><pre>@{json(string(outputs('Find_duplicates')))}</pre>",
+        "runAfter": {
+          "Find_duplicates": [
+            "Succeeded"
+          ],
+          "Invalid_email": [
+            "Succeeded"
+          ],
+          "Invalid_date_range": [
+            "Succeeded"
+          ],
+          "Missing_required": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Post_to_Teams": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_teams",
+            "operationId": "PostMessageToChannel",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+          },
+          "parameters": {
+            "teamId": "@first(split(parameters('teamsChannelId'), '@'))",
+            "channelId": "@parameters('teamsChannelId')",
+            "message": "@{outputs('Summary_table')}"
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {
+          "Summary_table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Send_email": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_office365",
+            "operationId": "SendEmailV2",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+          },
+          "parameters": {
+            "to": "data-quality@contoso.com",
+            "subject": "データクレンジング検知結果",
+            "body": "@{outputs('Summary_table')}",
+            "importance": "High"
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {
+          "Summary_table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Run_PAD": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_uipath",
+            "operationId": "RunDesktopFlow",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_uipath"
+          },
+          "parameters": {
+            "flowName": "MasterSyncDesktopFlow",
+            "requestBody": {
+              "items": "@outputs('Get_items')?['body/value']",
+              "fixes": {
+                "missing": "@outputs('Missing_required')",
+                "email": "@outputs('Invalid_email')",
+                "dates": "@outputs('Invalid_date_range')",
+                "duplicates": "@outputs('Find_duplicates')"
+              }
+            }
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {
+          "Summary_table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Append_log": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_sharepointonline",
+            "operationId": "CreateItem",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+          },
+          "parameters": {
+            "dataset": "@parameters('siteAddress')",
+            "table": "@parameters('logListName')",
+            "item/Title": "@{utcNow()} クレンジング結果",
+            "item/ResultSummary": "@{outputs('Summary_table')}",
+            "item/PADStatus": "@{coalesce(outputs('Run_PAD')?['status'], 'NotTriggered')}"
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runAfter": {
+          "Run_PAD": [
+            "Succeeded",
+            "Failed",
+            "Skipped"
+          ]
+        }
+      }
+    },
+    "outputs": {}
+  }
+}

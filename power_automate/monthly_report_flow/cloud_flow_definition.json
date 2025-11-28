@@ -1,0 +1,271 @@
+{
+  "name": "MonthlyReportFlow",
+  "type": "Microsoft.Logic/workflows",
+  "location": "japaneast",
+  "kind": "Stateful",
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "siteAddress": {
+        "type": "String",
+        "defaultValue": "https://contoso.sharepoint.com/sites/reports"
+      },
+      "sourceListName": {
+        "type": "String",
+        "defaultValue": "MonthlyData"
+      },
+      "reportLibrary": {
+        "type": "String",
+        "defaultValue": "Shared Documents"
+      },
+      "teamsChannelId": {
+        "type": "String",
+        "defaultValue": "19:xxx@thread.tacv2"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Month",
+          "interval": 1,
+          "startTime": "2024-01-01T00:00:00Z",
+          "timeZone": "Tokyo Standard Time",
+          "schedule": {
+            "hours": [
+              0
+            ],
+            "minutes": [
+              0
+            ],
+            "monthDays": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    "actions": {
+      "Compose_StartDate": {
+        "type": "Compose",
+        "inputs": "@startOfMonth(utcNow())"
+      },
+      "Compose_EndDate": {
+        "type": "Compose",
+        "inputs": "@addSeconds(startOfMonth(addMonths(utcNow(),1)),-1)",
+        "runAfter": {
+          "Compose_StartDate": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Get_items": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+            }
+          },
+          "method": "get",
+          "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('sourceListName')))}",
+          "queries": {
+            "$filter": "Created ge @{outputs('Compose_StartDate')} and Created le @{outputs('Compose_EndDate')}"
+          }
+        },
+        "runAfter": {
+          "Compose_EndDate": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Create_HTML_table": {
+        "type": "Table",
+        "inputs": {
+          "from": "@body('Get_items')?['value']"
+        },
+        "runAfter": {
+          "Get_items": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Compose_ReportBody": {
+        "type": "Compose",
+        "inputs": "<h2>月次レポート</h2><p>@{formatDateTime(outputs('Compose_StartDate'),'yyyy-MM-dd')} から @{formatDateTime(outputs('Compose_EndDate'),'yyyy-MM-dd')} のデータです。</p>@{outputs('Create_HTML_table')}",
+        "runAfter": {
+          "Create_HTML_table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Create_report_file": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": {
+            "folderPath": "/@{parameters('reportLibrary')}",
+            "name": "MonthlyReport-@{formatDateTime(utcNow(),'yyyy-MM')}.html",
+            "fileName": "MonthlyReport-@{formatDateTime(utcNow(),'yyyy-MM')}.html",
+            "fileContent": "@outputs('Compose_ReportBody')"
+          },
+          "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//files"
+        },
+        "runAfter": {
+          "Compose_ReportBody": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Send_Email": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_office365']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": {
+            "To": "finance@contoso.com",
+            "Subject": "月次レポート @{formatDateTime(utcNow(),'yyyy-MM')}",
+            "Body": "@outputs('Compose_ReportBody')",
+            "Attachments": [
+              {
+                "Name": "MonthlyReport-@{formatDateTime(utcNow(),'yyyy-MM')}.html",
+                "ContentBytes": "@body('Create_report_file')?['$content']"
+              }
+            ],
+            "Importance": "Normal"
+          },
+          "path": "/v2/Mail"
+        },
+        "runAfter": {
+          "Create_report_file": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Post_Teams_message": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_teams']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": {
+            "channelId": "@parameters('teamsChannelId')",
+            "rootMessageId": "",
+            "importance": "normal",
+            "messageBody": {
+              "contentType": "html",
+              "content": "月次レポート (@{formatDateTime(utcNow(),'yyyy-MM')}) を作成しました。<br/>@{body('Create_report_file')?['Path']}"
+            }
+          },
+          "path": "/v3/conversations/@{encodeURIComponent(encodeURIComponent(parameters('teamsChannelId')))}"
+        },
+        "runAfter": {
+          "Create_report_file": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Run_desktop_flow": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_rpa']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/api/agentdesktopflows/runs",
+          "body": {
+            "flowId": "00000000-0000-0000-0000-000000000000",
+            "displayName": "Monthly Report Desktop",
+            "inputs": {
+              "reportLink": "@body('Create_report_file')?['Path']",
+              "periodStart": "@outputs('Compose_StartDate')",
+              "periodEnd": "@outputs('Compose_EndDate')"
+            }
+          }
+        },
+        "runAfter": {
+          "Post_Teams_message": [
+            "Succeeded"
+          ],
+          "Send_Email": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Log_result": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent('ReportRunLog'))}",
+          "body": {
+            "item": {
+              "Title": "@formatDateTime(utcNow(),'yyyy-MM')",
+              "Start": "@outputs('Compose_StartDate')",
+              "End": "@outputs('Compose_EndDate')",
+              "ReportPath": "@body('Create_report_file')?['Path']",
+              "PadStatus": "@{outputs('Run_desktop_flow')?['status']}"
+            }
+          }
+        },
+        "runAfter": {
+          "Run_desktop_flow": [
+            "Succeeded",
+            "Failed"
+          ]
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "connectionReferences": {
+    "shared_sharepointonline": {
+      "connectionName": "shared_sharepointonline",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "apiDefinition": {
+        "name": "shared_sharepointonline"
+      }
+    },
+    "shared_office365": {
+      "connectionName": "shared_office365",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "apiDefinition": {
+        "name": "shared_office365"
+      }
+    },
+    "shared_teams": {
+      "connectionName": "shared_teams",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_teams",
+      "apiDefinition": {
+        "name": "shared_teams"
+      }
+    },
+    "shared_rpa": {
+      "connectionName": "shared_rpa",
+      "connectionId": "/providers/Microsoft.PowerApps/apis/shared_rpa",
+      "apiDefinition": {
+        "name": "shared_rpa"
+      }
+    }
+  },
+  "schemaVersion": "1.0"
+}
