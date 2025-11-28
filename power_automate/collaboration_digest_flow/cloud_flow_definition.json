@@ -1,0 +1,377 @@
+{
+  "name": "CollaborationDigestFlow",
+  "type": "Microsoft.Logic/workflows",
+  "location": "japaneast",
+  "kind": "Stateful",
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "siteAddress": {
+        "type": "String",
+        "defaultValue": "https://contoso.sharepoint.com/sites/collab"
+      },
+      "newsListName": {
+        "type": "String",
+        "defaultValue": "SitePages"
+      },
+      "libraryName": {
+        "type": "String",
+        "defaultValue": "Shared Documents"
+      },
+      "teamsChannelId": {
+        "type": "String",
+        "defaultValue": "19:xxxx@thread.tacv2"
+      },
+      "plannerPlanId": {
+        "type": "String",
+        "defaultValue": "abcd1234"
+      },
+      "plannerGroupId": {
+        "type": "String",
+        "defaultValue": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Week",
+          "interval": 1,
+          "schedule": {
+            "hours": [
+              23
+            ],
+            "minutes": [
+              0
+            ],
+            "weekDays": [
+              "Monday",
+              "Tuesday",
+              "Wednesday",
+              "Thursday",
+              "Friday"
+            ]
+          },
+          "timeZone": "Tokyo Standard Time"
+        }
+      }
+    },
+    "actions": {
+      "Initialize_digest": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "digestBody",
+              "type": "String",
+              "value": ""
+            },
+            {
+              "name": "startOfDay",
+              "type": "String",
+              "value": "@formatDateTime(convertTimeZone(utcNow(),'UTC','Tokyo Standard Time'),'yyyy-MM-ddT00:00:00')"
+            },
+            {
+              "name": "endOfDay",
+              "type": "String",
+              "value": "@formatDateTime(addDays(convertTimeZone(utcNow(),'UTC','Tokyo Standard Time'),1),'yyyy-MM-ddT00:00:00')"
+            }
+          ]
+        },
+        "runAfter": {}
+      },
+      "List_planner_tasks": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "api": {
+              "runtimeUrl": "https://plannea.%DEFAULT_REGION%.logic.azure.com"
+            },
+            "connectionName": "shared_planner"
+          },
+          "operationId": "ListTasks",
+          "parameters": {
+            "groupId": "@parameters('plannerGroupId')",
+            "planId": "@parameters('plannerPlanId')"
+          }
+        },
+        "runAfter": {
+          "Initialize_digest": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Filter_due_tasks": {
+        "type": "Query",
+        "inputs": {
+          "from": "@body('List_planner_tasks')?['value']",
+          "where": "@and(not(equals(item()['percentComplete'], 100)), lessOrEquals(item()['dueDateTime'], variables('endOfDay')) )"
+        },
+        "runAfter": {
+          "List_planner_tasks": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Planner_table": {
+        "type": "Table",
+        "inputs": {
+          "from": "@body('Filter_due_tasks')",
+          "columns": [
+            {
+              "name": "タイトル",
+              "value": "@item()?['title']"
+            },
+            {
+              "name": "担当者",
+              "value": "@first(item()?['assignments'])?['displayName']"
+            },
+            {
+              "name": "期限",
+              "value": "@item()?['dueDateTime']"
+            }
+          ]
+        },
+        "runAfter": {
+          "Filter_due_tasks": [
+            "Succeeded"
+          ]
+        }
+      },
+      "List_updated_pages": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_sharepointonline",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+            "url": "https://api.%DEFAULT_REGION%.sharepoint.com"
+          },
+          "operationId": "GetItems",
+          "parameters": {
+            "dataset": "@parameters('siteAddress')",
+            "table": "@parameters('newsListName')",
+            "$top": 50,
+            "$filter": "Modified ge datetime'@{variables('startOfDay')}'"
+          }
+        },
+        "runAfter": {
+          "Planner_table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "List_new_files": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_sharepointonline",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+            "url": "https://api.%DEFAULT_REGION%.sharepoint.com"
+          },
+          "operationId": "GetFiles",
+          "parameters": {
+            "dataset": "@parameters('siteAddress')",
+            "id": "@{encodeUriComponent(parameters('libraryName'))}",
+            "$top": 50,
+            "$filter": "TimeLastModified ge datetime'@{variables('startOfDay')}'"
+          }
+        },
+        "runAfter": {
+          "List_updated_pages": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Pages_table": {
+        "type": "Table",
+        "inputs": {
+          "from": "@body('List_updated_pages')?['value']",
+          "columns": [
+            {
+              "name": "ページ",
+              "value": "@item()?['Title']"
+            },
+            {
+              "name": "更新日時",
+              "value": "@item()?['Modified']"
+            },
+            {
+              "name": "URL",
+              "value": "@item()?['LinkingUrl']"
+            }
+          ]
+        },
+        "runAfter": {
+          "List_new_files": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Files_table": {
+        "type": "Table",
+        "inputs": {
+          "from": "@body('List_new_files')?['value']",
+          "columns": [
+            {
+              "name": "ファイル名",
+              "value": "@item()?['Name']"
+            },
+            {
+              "name": "更新日時",
+              "value": "@item()?['TimeLastModified']"
+            },
+            {
+              "name": "URL",
+              "value": "@item()?['LinkingUrl']"
+            }
+          ]
+        },
+        "runAfter": {
+          "Pages_table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Get_calendar": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_office365",
+            "operationId": "GetCalendarViewV3",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+          },
+          "parameters": {
+            "startDateTime": "@variables('startOfDay')",
+            "endDateTime": "@variables('endOfDay')"
+          }
+        },
+        "runAfter": {
+          "Files_table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Calendar_table": {
+        "type": "Table",
+        "inputs": {
+          "from": "@body('Get_calendar')?['value']",
+          "columns": [
+            {
+              "name": "件名",
+              "value": "@item()?['subject']"
+            },
+            {
+              "name": "開始",
+              "value": "@item()?['start']?['dateTime']"
+            },
+            {
+              "name": "場所",
+              "value": "@item()?['location']?['displayName']"
+            }
+          ]
+        },
+        "runAfter": {
+          "Get_calendar": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Compose_body": {
+        "type": "Compose",
+        "inputs": "<h3>期限が近いタスク</h3>@{outputs('Planner_table')}<h3>新着ページ/ニュース</h3>@{outputs('Pages_table')}<h3>新着ドキュメント</h3>@{outputs('Files_table')}<h3>本日の予定</h3>@{outputs('Calendar_table')}",
+        "runAfter": {
+          "Calendar_table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Post_to_Teams": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_teams",
+            "operationId": "PostMessageToChannel",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+          },
+          "parameters": {
+            "teamId": "@split(parameters('teamsChannelId'),'@')[0]",
+            "channelId": "@parameters('teamsChannelId')",
+            "message": "@{outputs('Compose_body')}"
+          }
+        },
+        "runAfter": {
+          "Compose_body": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Send_email": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_office365",
+            "operationId": "SendEmailV2",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+          },
+          "parameters": {
+            "to": "team@contoso.com",
+            "subject": "本日のコラボ情報ダイジェスト",
+            "body": "@{outputs('Compose_body')}",
+            "importance": "Normal",
+            "isHtml": true
+          }
+        },
+        "runAfter": {
+          "Post_to_Teams": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Run_PAD": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_uipath",
+            "operationId": "RunDesktopFlow",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_uipath"
+          },
+          "parameters": {
+            "flowName": "CollabSyncDesktopFlow",
+            "inputs": {
+              "startOfDay": "@variables('startOfDay')",
+              "calendar": "@body('Get_calendar')",
+              "channelId": "@parameters('teamsChannelId')"
+            }
+          }
+        },
+        "runAfter": {
+          "Send_email": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Reply_PAD_result": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "connectionName": "shared_teams",
+            "operationId": "PostReplyToMessage",
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+          },
+          "parameters": {
+            "teamId": "@split(parameters('teamsChannelId'),'@')[0]",
+            "channelId": "@parameters('teamsChannelId')",
+            "parentMessageId": "@outputs('Post_to_Teams')?['body']?['id']",
+            "message": "オンプレ同期が完了しました: @{body('Run_PAD')?['status']}"
+          }
+        },
+        "runAfter": {
+          "Run_PAD": [
+            "Succeeded"
+          ]
+        }
+      }
+    }
+  }
+}
