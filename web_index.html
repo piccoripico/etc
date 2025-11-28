@@ -12,6 +12,9 @@
       --line: #cbd5e1;
       --text: #0f172a;
       --error: #ef4444;
+      --complete: #dcfce7;
+      --conflict: #fef3c7;
+      --note: #e2e8f0;
     }
     body {
       margin: 0;
@@ -46,6 +49,14 @@
       gap: 12px;
       align-items: center;
       margin-bottom: 16px;
+    }
+    .timer {
+      margin-left: auto;
+      font-weight: 700;
+      padding: 8px 12px;
+      background: #eef2ff;
+      border-radius: 10px;
+      color: #312e81;
     }
     label {
       font-weight: 600;
@@ -127,8 +138,38 @@
     }
     .cell.given { font-weight: 700; background: #f8fafc; }
     .cell.selected { outline: 3px solid rgba(20,184,166,0.45); z-index: 1; }
-    .cell.error { color: var(--error); background: #fee2e2; }
-    .cell.solved { color: var(--accent); }
+    .cell.completed-number { background: var(--complete); color: #166534; }
+    .cell.conflict { background: var(--conflict); }
+    .cell .notes {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 2px;
+      width: 100%;
+      height: 100%;
+      padding: 6px;
+      box-sizing: border-box;
+      color: #475569;
+      font-size: 10px;
+      text-align: center;
+      line-height: 1.2;
+    }
+    .cell .notes span { display: block; min-height: 10px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #f8fafc;
+    }
+    .toggle.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(20,184,166,0.2); }
+    .pad button.secondary { background: #f1f5f9; }
 
     .panel {
       border: 1px solid var(--line);
@@ -190,6 +231,7 @@
       <button class="ghost" id="reset">最初の状態に戻す</button>
       <button class="ghost" id="hint">ヒントを埋める</button>
       <button class="ghost" id="solve">答えを表示</button>
+      <div class="timer" id="timer" aria-live="polite">--:--</div>
     </div>
 
     <div class="board-wrapper">
@@ -197,7 +239,12 @@
       <div class="panel">
         <h2>数字パッド</h2>
         <div class="pad" id="pad"></div>
-        <p class="hint-text">キーボードの 1-9 / Delete / Backspace でも入力できます。</p>
+        <div class="controls">
+          <button class="toggle" id="noteToggle">✏️ メモ</button>
+          <button class="ghost" id="undo">↩️ 元に戻す</button>
+          <button class="ghost" id="redo">↪️ やり直す</button>
+        </div>
+        <p class="hint-text">キーボードの 1-9 / Delete / Backspace に加え、矢印で移動、Enter でメモモード切替ができます。</p>
         <div class="status" id="status">読み込み中...</div>
       </div>
     </div>
@@ -207,11 +254,23 @@
     const boardEl = document.getElementById('board');
     const padEl = document.getElementById('pad');
     const statusEl = document.getElementById('status');
+    const timerEl = document.getElementById('timer');
+    const noteToggleEl = document.getElementById('noteToggle');
+    const undoEl = document.getElementById('undo');
+    const redoEl = document.getElementById('redo');
     let puzzle = [];
     let solution = [];
     let current = [];
+    let notes = [];
     let givens = new Set();
     let selected = null;
+    let noteMode = false;
+    let history = [];
+    let future = [];
+    let solutionDigitMap = new Map();
+    let timerStart = null;
+    let timerInterval = null;
+    let solvedAt = null;
 
     function createRng(seedInput) {
       if (seedInput === '' || seedInput === null || seedInput === undefined) return Math.random;
@@ -350,6 +409,67 @@
 
     function cellKey(r, c) { return `${r}-${c}`; }
 
+    function cloneBoard(board) {
+      return board.map(row => [...row]);
+    }
+
+    function cloneNotes(notesBoard) {
+      return notesBoard.map(row => row.map(set => new Set(set)));
+    }
+
+    function recordStateForUndo() {
+      history.push({ current: cloneBoard(current), notes: cloneNotes(notes) });
+      if (history.length > 200) history.shift();
+      future = [];
+    }
+
+    function restoreState(state) {
+      current = cloneBoard(state.current);
+      notes = cloneNotes(state.notes);
+      renderBoard();
+      updateStatus();
+    }
+
+    function toggleNoteMode(force) {
+      if (typeof force === 'boolean') {
+        noteMode = force;
+      } else {
+        noteMode = !noteMode;
+      }
+      noteToggleEl.classList.toggle('active', noteMode);
+      noteToggleEl.textContent = noteMode ? '✏️ メモ中' : '✏️ メモ';
+    }
+
+    function startTimer() {
+      timerStart = Date.now();
+      solvedAt = null;
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(updateTimerDisplay, 1000);
+      updateTimerDisplay();
+    }
+
+    function stopTimer(final = false) {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = null;
+      if (final) updateTimerDisplay(true);
+    }
+
+    function formatTime(ms) {
+      const totalSeconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+      const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    }
+
+    function updateTimerDisplay(freeze = false) {
+      if (!timerStart) {
+        timerEl.textContent = '--:--';
+        return;
+      }
+      const now = freeze && solvedAt ? solvedAt : Date.now();
+      timerEl.textContent = formatTime(now - timerStart);
+    }
+
     function buildBoard() {
       boardEl.innerHTML = '';
       for (let r = 0; r < 9; r++) {
@@ -375,8 +495,13 @@
       }
       const clearBtn = document.createElement('button');
       clearBtn.textContent = '消去';
+      clearBtn.classList.add('secondary');
       clearBtn.addEventListener('click', () => applyValue(0));
       padEl.appendChild(clearBtn);
+    }
+
+    function ensureNotes() {
+      notes = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => new Set()));
     }
 
     function selectCell(cell) {
@@ -393,25 +518,115 @@
       const c = Number(selected.dataset.col);
       if (givens.has(cellKey(r, c))) return;
 
-      current[r][c] = value;
-      renderCell(r, c);
+      recordStateForUndo();
+
+      if (noteMode) {
+        if (value === 0) {
+          notes[r][c].clear();
+        } else {
+          if (notes[r][c].has(value)) {
+            notes[r][c].delete(value);
+          } else {
+            notes[r][c].add(value);
+          }
+        }
+      } else {
+        current[r][c] = value;
+        notes[r][c].clear();
+      }
+
+      renderBoard();
       updateStatus();
     }
 
-    function renderCell(r, c) {
+    function calculateConflicts() {
+      const conflicts = new Set();
+      // rows and columns
+      for (let i = 0; i < 9; i++) {
+        const rowMap = new Map();
+        const colMap = new Map();
+        for (let j = 0; j < 9; j++) {
+          const rowVal = current[i][j];
+          const colVal = current[j][i];
+          if (rowVal) {
+            const arr = rowMap.get(rowVal) || [];
+            arr.push([i, j]);
+            rowMap.set(rowVal, arr);
+          }
+          if (colVal) {
+            const arr = colMap.get(colVal) || [];
+            arr.push([j, i]);
+            colMap.set(colVal, arr);
+          }
+        }
+        for (const arr of [...rowMap.values(), ...colMap.values()]) {
+          if (arr.length > 1) arr.forEach(([r, c]) => conflicts.add(cellKey(r, c)));
+        }
+      }
+      // blocks
+      for (let br = 0; br < 3; br++) {
+        for (let bc = 0; bc < 3; bc++) {
+          const map = new Map();
+          for (let r = br * 3; r < br * 3 + 3; r++) {
+            for (let c = bc * 3; c < bc * 3 + 3; c++) {
+              const val = current[r][c];
+              if (!val) continue;
+              const arr = map.get(val) || [];
+              arr.push([r, c]);
+              map.set(val, arr);
+            }
+          }
+          for (const arr of map.values()) {
+            if (arr.length > 1) arr.forEach(([r, c]) => conflicts.add(cellKey(r, c)));
+          }
+        }
+      }
+      return conflicts;
+    }
+
+    function calculateCompletedNumbers() {
+      const completed = new Set();
+      for (let num = 1; num <= 9; num++) {
+        const positions = solutionDigitMap.get(num) || [];
+        if (positions.length === 9 && positions.every(([r, c]) => current[r][c] === num)) {
+          completed.add(num);
+        }
+      }
+      return completed;
+    }
+
+    function renderCell(r, c, conflicts, completedNumbers) {
       const value = current[r][c];
       const cell = boardEl.children[r * 9 + c];
-      cell.textContent = value ? value : '';
+      cell.classList.toggle('selected', cell === selected);
       cell.classList.toggle('given', givens.has(cellKey(r, c)));
-      cell.classList.toggle('solved', value && value === solution[r][c] && !givens.has(cellKey(r, c)));
-      const isError = value !== 0 && value !== solution[r][c];
-      cell.classList.toggle('error', isError);
+      cell.classList.toggle('completed-number', value && completedNumbers.has(value) && value === solution[r][c]);
+      cell.classList.toggle('conflict', conflicts.has(cellKey(r, c)));
+
+      cell.innerHTML = '';
+      if (value) {
+        cell.textContent = value;
+      } else {
+        const noteVals = Array.from(notes[r][c]).sort((a, b) => a - b);
+        if (noteVals.length) {
+          const notesGrid = document.createElement('div');
+          notesGrid.className = 'notes';
+          for (let i = 1; i <= 9; i++) {
+            const span = document.createElement('span');
+            span.textContent = noteVals.includes(i) ? i : '';
+            notesGrid.appendChild(span);
+          }
+          cell.appendChild(notesGrid);
+        }
+      }
     }
 
     function renderBoard() {
+      const conflicts = calculateConflicts();
+      const completedNumbers = calculateCompletedNumbers();
       for (let r = 0; r < 9; r++) {
         for (let c = 0; c < 9; c++) {
-          renderCell(r, c);
+          renderCell(r, c, conflicts, completedNumbers);
         }
       }
     }
@@ -422,26 +637,43 @@
     }
 
     function updateStatus() {
-      const incorrect = [];
       let filled = true;
       for (let r = 0; r < 9; r++) {
         for (let c = 0; c < 9; c++) {
           const value = current[r][c];
           if (value === 0) filled = false;
-          if (value !== 0 && value !== solution[r][c]) incorrect.push([r, c]);
         }
       }
-      if (incorrect.length) {
-        setStatus('まだ間違いがあります。赤いマスを修正してください。', 'warning');
-      } else if (filled) {
-        setStatus('おめでとうございます！すべて正解です。', 'success');
+      if (filled && isSolved()) {
+        if (!solvedAt) {
+          solvedAt = Date.now();
+          stopTimer(true);
+        }
+        setStatus(`おめでとうございます！すべて正解です。（タイム: ${formatTime(solvedAt - timerStart)}）`, 'success');
       } else {
-        setStatus('数字を入力してください。ヒントやリセットも利用できます。');
+        setStatus('数字を入力してください。ヒント・メモ・Undo/Redo を活用できます。');
       }
     }
 
-    function resetBoard() {
-      current = puzzle.map(row => [...row]);
+    function isSolved() {
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (current[r][c] !== solution[r][c]) return false;
+        }
+      }
+      return true;
+    }
+
+    function resetBoard(pushHistory = true, restartTimer = false) {
+      if (pushHistory) recordStateForUndo();
+      current = cloneBoard(puzzle);
+      ensureNotes();
+      solvedAt = null;
+      if (restartTimer) {
+        startTimer();
+      } else {
+        updateTimerDisplay();
+      }
       renderBoard();
       updateStatus();
     }
@@ -454,18 +686,54 @@
       const { puzzleBoard, solutionBoard } = generatePuzzle(clues, seedValue);
       puzzle = puzzleBoard;
       solution = solutionBoard;
+      solutionDigitMap = new Map();
+      for (let num = 1; num <= 9; num++) solutionDigitMap.set(num, []);
       givens = new Set();
       for (let r = 0; r < 9; r++) {
         for (let c = 0; c < 9; c++) {
-          if (puzzle[r][c]) givens.add(cellKey(r, c));
+          const val = puzzle[r][c];
+          if (val) givens.add(cellKey(r, c));
+          solutionDigitMap.get(solution[r][c]).push([r, c]);
         }
       }
-      resetBoard();
-      selected = null;
+      history = [];
+      future = [];
+      ensureNotes();
+      current = cloneBoard(puzzle);
+      renderBoard();
+      updateStatus();
+      selected = boardEl.firstChild;
+      if (selected) selectCell(selected);
+      toggleNoteMode(false);
+      startTimer();
+    }
+
+    function ensureSelection() {
+      if (!selected) {
+        selected = boardEl.firstChild;
+        if (selected) selected.classList.add('selected');
+      }
+    }
+
+    function moveSelection(dr, dc) {
+      ensureSelection();
+      const r = Number(selected.dataset.row);
+      const c = Number(selected.dataset.col);
+      const nr = (r + dr + 9) % 9;
+      const nc = (c + dc + 9) % 9;
+      selectCell(boardEl.children[nr * 9 + nc]);
     }
 
     function handleKey(event) {
-      if (!selected) return;
+      if (event.key === 'ArrowUp') { moveSelection(-1, 0); event.preventDefault(); return; }
+      if (event.key === 'ArrowDown') { moveSelection(1, 0); event.preventDefault(); return; }
+      if (event.key === 'ArrowLeft') { moveSelection(0, -1); event.preventDefault(); return; }
+      if (event.key === 'ArrowRight') { moveSelection(0, 1); event.preventDefault(); return; }
+      if (event.key === 'Enter') { toggleNoteMode(); return; }
+      if (event.ctrlKey && event.key.toLowerCase() === 'z') { event.preventDefault(); undoAction(); return; }
+      if (event.ctrlKey && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) { event.preventDefault(); redoAction(); return; }
+
+      ensureSelection();
       if (event.key >= '1' && event.key <= '9') {
         applyValue(Number(event.key));
       } else if (event.key === 'Backspace' || event.key === 'Delete' || event.key === '0') {
@@ -477,8 +745,10 @@
       for (let r = 0; r < 9; r++) {
         for (let c = 0; c < 9; c++) {
           if (current[r][c] === 0) {
+            recordStateForUndo();
             current[r][c] = solution[r][c];
-            renderCell(r, c);
+            notes[r][c].clear();
+            renderBoard();
             updateStatus();
             return;
           }
@@ -488,15 +758,36 @@
     }
 
     function showSolution() {
-      current = solution.map(row => [...row]);
+      recordStateForUndo();
+      current = cloneBoard(solution);
+      ensureNotes();
       renderBoard();
+      solvedAt = Date.now();
+      stopTimer(true);
       setStatus('解答を表示しました。', 'success');
     }
 
+    function undoAction() {
+      if (!history.length) return;
+      future.push({ current: cloneBoard(current), notes: cloneNotes(notes) });
+      const prev = history.pop();
+      restoreState(prev);
+    }
+
+    function redoAction() {
+      if (!future.length) return;
+      history.push({ current: cloneBoard(current), notes: cloneNotes(notes) });
+      const next = future.pop();
+      restoreState(next);
+    }
+
     document.getElementById('newGame').addEventListener('click', loadNewPuzzle);
-    document.getElementById('reset').addEventListener('click', resetBoard);
+    document.getElementById('reset').addEventListener('click', () => resetBoard(true, true));
     document.getElementById('hint').addEventListener('click', revealHint);
     document.getElementById('solve').addEventListener('click', showSolution);
+    noteToggleEl.addEventListener('click', () => toggleNoteMode());
+    undoEl.addEventListener('click', undoAction);
+    redoEl.addEventListener('click', redoAction);
     document.addEventListener('keydown', handleKey);
 
     buildBoard();
