@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ブラウザ版 数独</title>
+  <style>
+    :root {
+      --accent: #0f766e;
+      --accent-light: #14b8a6;
+      --bg: #f8fafc;
+      --line: #cbd5e1;
+      --text: #0f172a;
+      --error: #ef4444;
+      --complete: #dcfce7;
+      --conflict: #fef3c7;
+      --note: #e2e8f0;
+    }
+    body {
+      margin: 0;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    main {
+      background: white;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+      border-radius: 16px;
+      padding: 24px;
+      width: min(960px, 100%);
+    }
+    h1 {
+      margin-top: 0;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+    .subtitle {
+      margin: 0 0 16px;
+      color: #475569;
+    }
+    .top-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .timer {
+      margin-left: auto;
+      font-weight: 700;
+      padding: 8px 12px;
+      background: #eef2ff;
+      border-radius: 10px;
+      color: #312e81;
+    }
+    label {
+      font-weight: 600;
+      margin-right: 8px;
+    }
+    input, select, button {
+      font-size: 16px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    input:focus, select:focus, button:focus-visible {
+      outline: 3px solid rgba(20, 184, 166, 0.35);
+      outline-offset: 2px;
+    }
+    button {
+      background: white;
+      cursor: pointer;
+      transition: transform 0.08s ease, box-shadow 0.12s ease;
+    }
+    button:hover {
+      box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+      transform: translateY(-1px);
+    }
+    button.primary {
+      background: linear-gradient(120deg, var(--accent), var(--accent-light));
+      color: white;
+      border: none;
+    }
+    button.ghost {
+      background: transparent;
+      border: 1px solid var(--line);
+    }
+    .board-wrapper {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 24px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .board-wrapper {
+        grid-template-columns: 1fr;
+      }
+    }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      grid-template-rows: repeat(9, 1fr);
+      gap: 0;
+      border: 2px solid #0f172a;
+      border-radius: 12px;
+      overflow: hidden;
+      background: white;
+      aspect-ratio: 1 / 1;
+    }
+    .cell {
+      position: relative;
+      border: 1px solid var(--line);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 24px;
+      user-select: none;
+      cursor: pointer;
+      background: white;
+      transition: background 0.1s ease, color 0.1s ease;
+    }
+    .cell:nth-child(3n + 1) {
+      border-left: 2px solid #0f172a;
+    }
+    .cell:nth-child(-n + 9) {
+      border-top: 2px solid #0f172a;
+    }
+    .cell[data-row="3"], .cell[data-row="6"] {
+      border-top: 2px solid #0f172a;
+    }
+    .cell[data-col="3"], .cell[data-col="6"] {
+      border-left: 2px solid #0f172a;
+    }
+    .cell.given { font-weight: 700; background: #f8fafc; }
+    .cell.selected { outline: 3px solid rgba(20,184,166,0.45); z-index: 1; }
+    .cell.completed-number { background: var(--complete); color: #166534; }
+    .cell.conflict { background: var(--conflict); }
+    .cell .notes {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 2px;
+      width: 100%;
+      height: 100%;
+      padding: 6px;
+      box-sizing: border-box;
+      color: #475569;
+      font-size: 10px;
+      text-align: center;
+      line-height: 1.2;
+    }
+    .cell .notes span { display: block; min-height: 10px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #f8fafc;
+    }
+    .toggle.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(20,184,166,0.2); }
+    .pad button.secondary { background: #f1f5f9; }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      background: #f9fafb;
+    }
+    .panel h2 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 18px;
+    }
+    .pad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .pad button {
+      padding: 12px 0;
+      font-size: 20px;
+      border-radius: 10px;
+    }
+    .status {
+      margin-top: 12px;
+      font-weight: 600;
+      color: #1f2937;
+    }
+    .status.success { color: #15803d; }
+    .status.warning { color: var(--error); }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .hint-text { color: #475569; font-size: 14px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ブラウザ版 数独</h1>
+    <p class="subtitle">クリックでマスを選択し、テンキーまたは下のパッドで数字を入力してください。</p>
+
+    <div class="top-bar">
+      <div>
+        <label for="clueCount">ヒント数</label>
+        <select id="clueCount">
+          <option value="28">28 (難しめ)</option>
+          <option value="32" selected>32 (標準)</option>
+          <option value="38">38 (易しめ)</option>
+          <option value="44">44 (かなり易しい)</option>
+        </select>
+      </div>
+      <div>
+        <label for="seed">シード</label>
+        <input id="seed" type="number" placeholder="任意" />
+      </div>
+      <button class="primary" id="newGame">新しい盤面を作成</button>
+      <button class="ghost" id="reset">最初の状態に戻す</button>
+      <button class="ghost" id="hint">ヒントを埋める</button>
+      <button class="ghost" id="solve">答えを表示</button>
+      <div class="timer" id="timer" aria-live="polite">--:--</div>
+    </div>
+
+    <div class="board-wrapper">
+      <div class="board" id="board" aria-label="数独盤面"></div>
+      <div class="panel">
+        <h2>数字パッド</h2>
+        <div class="pad" id="pad"></div>
+        <div class="controls">
+          <button class="toggle" id="noteToggle">✏️ メモ</button>
+          <button class="ghost" id="undo">↩️ 元に戻す</button>
+          <button class="ghost" id="redo">↪️ やり直す</button>
+        </div>
+        <p class="hint-text">キーボードの 1-9 / Delete / Backspace に加え、矢印で移動、Enter でメモモード切替ができます。</p>
+        <div class="status" id="status">読み込み中...</div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const boardEl = document.getElementById('board');
+    const padEl = document.getElementById('pad');
+    const statusEl = document.getElementById('status');
+    const timerEl = document.getElementById('timer');
+    const noteToggleEl = document.getElementById('noteToggle');
+    const undoEl = document.getElementById('undo');
+    const redoEl = document.getElementById('redo');
+    let puzzle = [];
+    let solution = [];
+    let current = [];
+    let notes = [];
+    let givens = new Set();
+    let selected = null;
+    let noteMode = false;
+    let history = [];
+    let future = [];
+    let solutionDigitMap = new Map();
+    let timerStart = null;
+    let timerInterval = null;
+    let solvedAt = null;
+
+    function createRng(seedInput) {
+      if (seedInput === '' || seedInput === null || seedInput === undefined) return Math.random;
+      const numeric = Number(seedInput);
+      if (!Number.isFinite(numeric)) return Math.random;
+      let state = numeric >>> 0 || 1;
+      return () => {
+        state ^= state << 13; state >>>= 0;
+        state ^= state >> 17; state >>>= 0;
+        state ^= state << 5;  state >>>= 0;
+        return (state >>> 0) / 0xffffffff;
+      };
+    }
+
+    function shuffle(array, rand) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+    }
+
+    function isSafe(board, row, col, value) {
+      for (let i = 0; i < 9; i++) {
+        if (board[row][i] === value || board[i][col] === value) return false;
+      }
+      const startRow = 3 * Math.floor(row / 3);
+      const startCol = 3 * Math.floor(col / 3);
+      for (let r = startRow; r < startRow + 3; r++) {
+        for (let c = startCol; c < startCol + 3; c++) {
+          if (board[r][c] === value) return false;
+        }
+      }
+      return true;
+    }
+
+    function findEmpty(board) {
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (board[r][c] === 0) return [r, c];
+        }
+      }
+      return null;
+    }
+
+    function solveBoard(board) {
+      const empty = findEmpty(board);
+      if (!empty) return board.map(row => [...row]);
+      const [r, c] = empty;
+      for (let value = 1; value <= 9; value++) {
+        if (isSafe(board, r, c, value)) {
+          board[r][c] = value;
+          const solved = solveBoard(board);
+          if (solved) return solved;
+          board[r][c] = 0;
+        }
+      }
+      board[r][c] = 0;
+      return null;
+    }
+
+    function countSolutions(board, limit = 2) {
+      const empty = findEmpty(board);
+      if (!empty) return 1;
+      const [r, c] = empty;
+      let solutions = 0;
+      for (let value = 1; value <= 9; value++) {
+        if (isSafe(board, r, c, value)) {
+          board[r][c] = value;
+          solutions += countSolutions(board, limit);
+          if (solutions >= limit) {
+            board[r][c] = 0;
+            return solutions;
+          }
+          board[r][c] = 0;
+        }
+      }
+      board[r][c] = 0;
+      return solutions;
+    }
+
+    function generateFullBoard(rand) {
+      const board = Array.from({ length: 9 }, () => Array(9).fill(0));
+      const nums = [1,2,3,4,5,6,7,8,9];
+
+      function backtrack(cell = 0) {
+        if (cell === 81) return true;
+        const r = Math.floor(cell / 9);
+        const c = cell % 9;
+        if (board[r][c] !== 0) return backtrack(cell + 1);
+        const shuffled = [...nums];
+        shuffle(shuffled, rand);
+        for (const value of shuffled) {
+          if (isSafe(board, r, c, value)) {
+            board[r][c] = value;
+            if (backtrack(cell + 1)) return true;
+            board[r][c] = 0;
+          }
+        }
+        return false;
+      }
+
+      backtrack();
+      return board;
+    }
+
+    function clampClues(value) {
+      return Math.max(17, Math.min(81, value));
+    }
+
+    function generatePuzzle(clues, seedValue) {
+      const rand = createRng(seedValue);
+      const clueCount = clampClues(clues);
+      const solutionBoard = generateFullBoard(rand);
+      const puzzleBoard = solutionBoard.map(row => [...row]);
+      const cells = [];
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) cells.push([r, c]);
+      }
+      shuffle(cells, rand);
+
+      let removed = 0;
+      for (const [r, c] of cells) {
+        if (81 - removed <= clueCount) break;
+        const backup = puzzleBoard[r][c];
+        puzzleBoard[r][c] = 0;
+        const copy = puzzleBoard.map(row => [...row]);
+        if (countSolutions(copy) !== 1) {
+          puzzleBoard[r][c] = backup;
+        } else {
+          removed += 1;
+        }
+      }
+
+      return { puzzleBoard, solutionBoard };
+    }
+
+    function cellKey(r, c) { return `${r}-${c}`; }
+
+    function cloneBoard(board) {
+      return board.map(row => [...row]);
+    }
+
+    function cloneNotes(notesBoard) {
+      return notesBoard.map(row => row.map(set => new Set(set)));
+    }
+
+    function recordStateForUndo() {
+      history.push({ current: cloneBoard(current), notes: cloneNotes(notes) });
+      if (history.length > 200) history.shift();
+      future = [];
+    }
+
+    function restoreState(state) {
+      current = cloneBoard(state.current);
+      notes = cloneNotes(state.notes);
+      renderBoard();
+      updateStatus();
+    }
+
+    function toggleNoteMode(force) {
+      if (typeof force === 'boolean') {
+        noteMode = force;
+      } else {
+        noteMode = !noteMode;
+      }
+      noteToggleEl.classList.toggle('active', noteMode);
+      noteToggleEl.textContent = noteMode ? '✏️ メモ中' : '✏️ メモ';
+    }
+
+    function startTimer() {
+      timerStart = Date.now();
+      solvedAt = null;
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(updateTimerDisplay, 1000);
+      updateTimerDisplay();
+    }
+
+    function stopTimer(final = false) {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = null;
+      if (final) updateTimerDisplay(true);
+    }
+
+    function formatTime(ms) {
+      const totalSeconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+      const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    }
+
+    function updateTimerDisplay(freeze = false) {
+      if (!timerStart) {
+        timerEl.textContent = '--:--';
+        return;
+      }
+      const now = freeze && solvedAt ? solvedAt : Date.now();
+      timerEl.textContent = formatTime(now - timerStart);
+    }
+
+    function buildBoard() {
+      boardEl.innerHTML = '';
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          cell.dataset.row = r;
+          cell.dataset.col = c;
+          cell.addEventListener('click', () => selectCell(cell));
+          boardEl.appendChild(cell);
+        }
+      }
+    }
+
+    function buildPad() {
+      padEl.innerHTML = '';
+      for (let i = 1; i <= 9; i++) {
+        const btn = document.createElement('button');
+        btn.textContent = i;
+        btn.className = 'num';
+        btn.addEventListener('click', () => applyValue(i));
+        padEl.appendChild(btn);
+      }
+      const clearBtn = document.createElement('button');
+      clearBtn.textContent = '消去';
+      clearBtn.classList.add('secondary');
+      clearBtn.addEventListener('click', () => applyValue(0));
+      padEl.appendChild(clearBtn);
+    }
+
+    function ensureNotes() {
+      notes = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => new Set()));
+    }
+
+    function selectCell(cell) {
+      if (selected) {
+        selected.classList.remove('selected');
+      }
+      selected = cell;
+      selected.classList.add('selected');
+    }
+
+    function applyValue(value) {
+      if (!selected) return;
+      const r = Number(selected.dataset.row);
+      const c = Number(selected.dataset.col);
+      if (givens.has(cellKey(r, c))) return;
+
+      recordStateForUndo();
+
+      if (noteMode) {
+        if (value === 0) {
+          notes[r][c].clear();
+        } else {
+          if (notes[r][c].has(value)) {
+            notes[r][c].delete(value);
+          } else {
+            notes[r][c].add(value);
+          }
+        }
+      } else {
+        current[r][c] = value;
+        notes[r][c].clear();
+      }
+
+      renderBoard();
+      updateStatus();
+    }
+
+    function calculateConflicts() {
+      const conflicts = new Set();
+      // rows and columns
+      for (let i = 0; i < 9; i++) {
+        const rowMap = new Map();
+        const colMap = new Map();
+        for (let j = 0; j < 9; j++) {
+          const rowVal = current[i][j];
+          const colVal = current[j][i];
+          if (rowVal) {
+            const arr = rowMap.get(rowVal) || [];
+            arr.push([i, j]);
+            rowMap.set(rowVal, arr);
+          }
+          if (colVal) {
+            const arr = colMap.get(colVal) || [];
+            arr.push([j, i]);
+            colMap.set(colVal, arr);
+          }
+        }
+        for (const arr of [...rowMap.values(), ...colMap.values()]) {
+          if (arr.length > 1) arr.forEach(([r, c]) => conflicts.add(cellKey(r, c)));
+        }
+      }
+      // blocks
+      for (let br = 0; br < 3; br++) {
+        for (let bc = 0; bc < 3; bc++) {
+          const map = new Map();
+          for (let r = br * 3; r < br * 3 + 3; r++) {
+            for (let c = bc * 3; c < bc * 3 + 3; c++) {
+              const val = current[r][c];
+              if (!val) continue;
+              const arr = map.get(val) || [];
+              arr.push([r, c]);
+              map.set(val, arr);
+            }
+          }
+          for (const arr of map.values()) {
+            if (arr.length > 1) arr.forEach(([r, c]) => conflicts.add(cellKey(r, c)));
+          }
+        }
+      }
+      return conflicts;
+    }
+
+    function calculateCompletedNumbers() {
+      const completed = new Set();
+      for (let num = 1; num <= 9; num++) {
+        const positions = solutionDigitMap.get(num) || [];
+        if (positions.length === 9 && positions.every(([r, c]) => current[r][c] === num)) {
+          completed.add(num);
+        }
+      }
+      return completed;
+    }
+
+    function renderCell(r, c, conflicts, completedNumbers) {
+      const value = current[r][c];
+      const cell = boardEl.children[r * 9 + c];
+      cell.classList.toggle('selected', cell === selected);
+      cell.classList.toggle('given', givens.has(cellKey(r, c)));
+      cell.classList.toggle('completed-number', value && completedNumbers.has(value) && value === solution[r][c]);
+      cell.classList.toggle('conflict', conflicts.has(cellKey(r, c)));
+
+      cell.innerHTML = '';
+      if (value) {
+        cell.textContent = value;
+      } else {
+        const noteVals = Array.from(notes[r][c]).sort((a, b) => a - b);
+        if (noteVals.length) {
+          const notesGrid = document.createElement('div');
+          notesGrid.className = 'notes';
+          for (let i = 1; i <= 9; i++) {
+            const span = document.createElement('span');
+            span.textContent = noteVals.includes(i) ? i : '';
+            notesGrid.appendChild(span);
+          }
+          cell.appendChild(notesGrid);
+        }
+      }
+    }
+
+    function renderBoard() {
+      const conflicts = calculateConflicts();
+      const completedNumbers = calculateCompletedNumbers();
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          renderCell(r, c, conflicts, completedNumbers);
+        }
+      }
+    }
+
+    function setStatus(message, type = '') {
+      statusEl.textContent = message;
+      statusEl.className = `status ${type}`;
+    }
+
+    function updateStatus() {
+      let filled = true;
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const value = current[r][c];
+          if (value === 0) filled = false;
+        }
+      }
+      if (filled && isSolved()) {
+        if (!solvedAt) {
+          solvedAt = Date.now();
+          stopTimer(true);
+        }
+        setStatus(`おめでとうございます！すべて正解です。（タイム: ${formatTime(solvedAt - timerStart)}）`, 'success');
+      } else {
+        setStatus('数字を入力してください。ヒント・メモ・Undo/Redo を活用できます。');
+      }
+    }
+
+    function isSolved() {
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (current[r][c] !== solution[r][c]) return false;
+        }
+      }
+      return true;
+    }
+
+    function resetBoard(pushHistory = true, restartTimer = false) {
+      if (pushHistory) recordStateForUndo();
+      current = cloneBoard(puzzle);
+      ensureNotes();
+      solvedAt = null;
+      if (restartTimer) {
+        startTimer();
+      } else {
+        updateTimerDisplay();
+      }
+      renderBoard();
+      updateStatus();
+    }
+
+    function loadNewPuzzle() {
+      const clues = Number(document.getElementById('clueCount').value);
+      const seedValue = document.getElementById('seed').value.trim();
+      setStatus('生成中...');
+
+      const { puzzleBoard, solutionBoard } = generatePuzzle(clues, seedValue);
+      puzzle = puzzleBoard;
+      solution = solutionBoard;
+      solutionDigitMap = new Map();
+      for (let num = 1; num <= 9; num++) solutionDigitMap.set(num, []);
+      givens = new Set();
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const val = puzzle[r][c];
+          if (val) givens.add(cellKey(r, c));
+          solutionDigitMap.get(solution[r][c]).push([r, c]);
+        }
+      }
+      history = [];
+      future = [];
+      ensureNotes();
+      current = cloneBoard(puzzle);
+      renderBoard();
+      updateStatus();
+      selected = boardEl.firstChild;
+      if (selected) selectCell(selected);
+      toggleNoteMode(false);
+      startTimer();
+    }
+
+    function ensureSelection() {
+      if (!selected) {
+        selected = boardEl.firstChild;
+        if (selected) selected.classList.add('selected');
+      }
+    }
+
+    function moveSelection(dr, dc) {
+      ensureSelection();
+      const r = Number(selected.dataset.row);
+      const c = Number(selected.dataset.col);
+      const nr = (r + dr + 9) % 9;
+      const nc = (c + dc + 9) % 9;
+      selectCell(boardEl.children[nr * 9 + nc]);
+    }
+
+    function handleKey(event) {
+      if (event.key === 'ArrowUp') { moveSelection(-1, 0); event.preventDefault(); return; }
+      if (event.key === 'ArrowDown') { moveSelection(1, 0); event.preventDefault(); return; }
+      if (event.key === 'ArrowLeft') { moveSelection(0, -1); event.preventDefault(); return; }
+      if (event.key === 'ArrowRight') { moveSelection(0, 1); event.preventDefault(); return; }
+      if (event.key === 'Enter') { toggleNoteMode(); return; }
+      if (event.ctrlKey && event.key.toLowerCase() === 'z') { event.preventDefault(); undoAction(); return; }
+      if (event.ctrlKey && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) { event.preventDefault(); redoAction(); return; }
+
+      ensureSelection();
+      if (event.key >= '1' && event.key <= '9') {
+        applyValue(Number(event.key));
+      } else if (event.key === 'Backspace' || event.key === 'Delete' || event.key === '0') {
+        applyValue(0);
+      }
+    }
+
+    function revealHint() {
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (current[r][c] === 0) {
+            recordStateForUndo();
+            current[r][c] = solution[r][c];
+            notes[r][c].clear();
+            renderBoard();
+            updateStatus();
+            return;
+          }
+        }
+      }
+      setStatus('ヒントを出せるマスがありません。', 'warning');
+    }
+
+    function showSolution() {
+      recordStateForUndo();
+      current = cloneBoard(solution);
+      ensureNotes();
+      renderBoard();
+      solvedAt = Date.now();
+      stopTimer(true);
+      setStatus('解答を表示しました。', 'success');
+    }
+
+    function undoAction() {
+      if (!history.length) return;
+      future.push({ current: cloneBoard(current), notes: cloneNotes(notes) });
+      const prev = history.pop();
+      restoreState(prev);
+    }
+
+    function redoAction() {
+      if (!future.length) return;
+      history.push({ current: cloneBoard(current), notes: cloneNotes(notes) });
+      const next = future.pop();
+      restoreState(next);
+    }
+
+    document.getElementById('newGame').addEventListener('click', loadNewPuzzle);
+    document.getElementById('reset').addEventListener('click', () => resetBoard(true, true));
+    document.getElementById('hint').addEventListener('click', revealHint);
+    document.getElementById('solve').addEventListener('click', showSolution);
+    noteToggleEl.addEventListener('click', () => toggleNoteMode());
+    undoEl.addEventListener('click', undoAction);
+    redoEl.addEventListener('click', redoAction);
+    document.addEventListener('keydown', handleKey);
+
+    buildBoard();
+    buildPad();
+    loadNewPuzzle();
+  </script>
+</body>
+</html>
