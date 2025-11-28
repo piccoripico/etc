@@ -1,0 +1,282 @@
+{
+  "name": "ContractRenewalReminderFlow",
+  "type": "Microsoft.Logic/workflows",
+  "location": "japaneast",
+  "kind": "Stateful",
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "siteAddress": {
+        "type": "String",
+        "defaultValue": "https://contoso.sharepoint.com/sites/contracts"
+      },
+      "contractListName": {
+        "type": "String",
+        "defaultValue": "Contracts"
+      },
+      "documentLibrary": {
+        "type": "String",
+        "defaultValue": "Shared Documents"
+      },
+      "teamsChannelId": {
+        "type": "String",
+        "defaultValue": "19:xxxxxxxxxxxxxxxx@thread.tacv2"
+      },
+      "noticeOffsets": {
+        "type": "String",
+        "defaultValue": "30,14,7"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Day",
+          "interval": 1,
+          "startTime": "2023-01-01T22:00:00Z",
+          "timeZone": "Tokyo Standard Time"
+        }
+      }
+    },
+    "actions": {
+      "Parse_notice_offsets": {
+        "runAfter": {},
+        "type": "Compose",
+        "inputs": "@split(parameters('noticeOffsets'),',')"
+      },
+      "Initialize_upcoming_array": {
+        "runAfter": {
+          "Parse_notice_offsets": [
+            "Succeeded"
+          ]
+        },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "upcomingContracts",
+              "type": "Array",
+              "value": []
+            }
+          ]
+        }
+      },
+      "For_each_offset": {
+        "foreach": "@outputs('Parse_notice_offsets')",
+        "actions": {
+          "Get_items_due": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+                }
+              },
+              "method": "get",
+              "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('contractListName')))}\/items",
+              "queries": {
+                "$filter": "RenewalDate eq '@{formatDateTime(addDays(utcNow(), int(item())), 'yyyy-MM-dd')}'",
+                "$top": 5000
+              },
+              "authentication": "@parameters('$authentication')"
+            }
+          },
+          "Append_to_aggregate": {
+            "runAfter": {
+              "Get_items_due": [
+                "Succeeded"
+              ]
+            },
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "upcomingContracts",
+              "value": {
+                "offset": "@int(item())",
+                "items": "@body('Get_items_due')?['value']"
+              }
+            }
+          }
+        },
+        "runAfter": {
+          "Initialize_upcoming_array": [
+            "Succeeded"
+          ]
+        },
+        "type": "Foreach"
+      },
+      "Flatten_contracts": {
+        "runAfter": {
+          "For_each_offset": [
+            "Succeeded"
+          ]
+        },
+        "type": "Compose",
+        "inputs": "@select(flatten(body('For_each_offset')), item())"
+      },
+      "For_each_contract": {
+        "runAfter": {
+          "Flatten_contracts": [
+            "Succeeded"
+          ]
+        },
+        "type": "Foreach",
+        "foreach": "@outputs('Flatten_contracts')",
+        "actions": {
+          "For_each_item": {
+            "type": "Foreach",
+            "foreach": "@item()?['items']",
+            "actions": {
+              "Build_notice_message": {
+                "type": "Compose",
+                "inputs": "@{concat('契約: ', item()?['Title'], '\nベンダー: ', item()?['Vendor'], '\n更新期限: ', formatDateTime(item()?['RenewalDate'], 'yyyy-MM-dd'), '\n残り日数: ', string(item()?['offset']), '日')}"
+              },
+              "Post_to_Teams": {
+                "runAfter": {
+                  "Build_notice_message": [
+                    "Succeeded"
+                  ]
+                },
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "connection": {
+                      "name": "@parameters('$connections')['shared_teams']['connectionId']"
+                    }
+                  },
+                  "method": "post",
+                  "path": "/v3/conversations/@{encodeURIComponent(parameters('teamsChannelId'))}/activities",
+                  "body": {
+                    "rootMessage": {
+                      "body": {
+                        "contentType": "html",
+                        "content": "@{replace(outputs('Build_notice_message'),'\n','<br>')}<br/><a href='@{item()?['{Link}']}'>契約台帳を開く</a>"
+                      }
+                    }
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              },
+              "Send_email": {
+                "runAfter": {
+                  "Post_to_Teams": [
+                    "Succeeded"
+                  ]
+                },
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "connection": {
+                      "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                    }
+                  },
+                  "method": "post",
+                  "path": "/v2/Mail",
+                  "body": {
+                    "To": "@{item()?['OwnerEmail']}",
+                    "Subject": "@{concat('[更新', string(item()?['offset']), '日前] ', item()?['Title'])}",
+                    "Body": "@{replace(outputs('Build_notice_message'),'\n','<br>')}<br/>資料: <a href='@{item()?['{Link}']}'>SharePoint</a>",
+                    "Importance": "High"
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              },
+              "Run_PAD_if_needed": {
+                "runAfter": {
+                  "Send_email": [
+                    "Succeeded"
+                  ]
+                },
+                "type": "If",
+                "expression": {
+                  "and": [
+                    {
+                      "equals": [
+                        "@item()?['NeedQuote']",
+                        true
+                      ]
+                    }
+                  ]
+                },
+                "actions": {
+                  "Run_desktop_flow": {
+                    "type": "OpenApiConnection",
+                    "inputs": {
+                      "host": {
+                        "connection": {
+                          "name": "@parameters('$connections')['shared_desktopflows']['connectionId']"
+                        }
+                      },
+                      "method": "post",
+                      "path": "/scopes/admin/api/environments/@{encodeURIComponent(encodeURIComponent(environment()))}/desktopflows/@{encodeURIComponent(encodeURIComponent('ContractPortalFetcher'))}/triggers/manual/paths/invoke",
+                      "body": {
+                        "overrideParameters": {
+                          "Vendor": "@item()?['Vendor']",
+                          "ContractId": "@item()?['ID']",
+                          "RenewalDate": "@item()?['RenewalDate']"
+                        }
+                      },
+                      "authentication": "@parameters('$authentication')"
+                    }
+                  },
+                  "Update_list_after_PAD": {
+                    "runAfter": {
+                      "Run_desktop_flow": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "OpenApiConnection",
+                    "inputs": {
+                      "host": {
+                        "connection": {
+                          "name": "@parameters('$connections')['shared_sharepointonline']['connectionId']"
+                        }
+                      },
+                      "method": "patch",
+                      "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('siteAddress')))}//tables/@{encodeURIComponent(encodeURIComponent(parameters('contractListName')))}\/items/@{encodeURIComponent(item()?['ID'])}",
+                      "body": {
+                        "LastNegotiation": "@utcNow()",
+                        "QuoteStatus": "Requested"
+                      },
+                      "authentication": "@parameters('$authentication')"
+                    }
+                  }
+                },
+                "else": {
+                  "actions": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "parameters": {
+    "$connections": {
+      "value": {
+        "shared_office365": {
+          "connectionId": "{{office365ConnectionId}}",
+          "connectionName": "shared_office365",
+          "id": "/providers/Microsoft.PowerApps/apis/shared_office365"
+        },
+        "shared_sharepointonline": {
+          "connectionId": "{{sharepointConnectionId}}",
+          "connectionName": "shared_sharepointonline",
+          "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+        },
+        "shared_teams": {
+          "connectionId": "{{teamsConnectionId}}",
+          "connectionName": "shared_teams",
+          "id": "/providers/Microsoft.PowerApps/apis/shared_teams"
+        },
+        "shared_desktopflows": {
+          "connectionId": "{{desktopflowsConnectionId}}",
+          "connectionName": "shared_desktopflows",
+          "id": "/providers/Microsoft.PowerApps/apis/shared_desktopflows"
+        }
+      }
+    }
+  }
+}
