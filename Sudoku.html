@@ -183,6 +183,12 @@
       margin-bottom: 12px;
       font-size: 18px;
     }
+    .pad-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: stretch;
+    }
     .pad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -203,11 +209,20 @@
       gap: 6px;
       background: #f8fafc;
       border: 1px solid var(--line);
+      white-space: nowrap;
     }
     .pad .pad-action.active {
       border-color: var(--accent);
       box-shadow: 0 0 0 2px rgba(20,184,166,0.2);
       font-weight: 700;
+    }
+    .pad-clear {
+      height: 100%;
+      padding: 12px 16px;
+      font-size: 18px;
+      border-radius: 10px;
+      align-self: stretch;
+      background: #f1f5f9;
     }
     .status {
       margin-top: 12px;
@@ -220,6 +235,12 @@
       margin-top: 8px;
       color: #475569;
       font-size: 14px;
+    }
+    .stats-list {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 4px;
     }
     .actions {
       display: flex;
@@ -261,13 +282,16 @@
       <div class="board" id="board" aria-label="数独盤面"></div>
       <div class="panel">
         <h2>数字パッド</h2>
-        <div class="pad" id="pad"></div>
+        <div class="pad-row">
+          <div class="pad" id="pad"></div>
+          <button class="ghost pad-clear" id="clear">消去</button>
+        </div>
         <div class="controls">
           <button class="ghost" id="undo">↩️ １つ戻す</button>
           <button class="ghost" id="redo">↪️ １つ進める</button>
         </div>
-        <p class="hint-text">キーボードの 1-9 / Delete / Backspace に加え、矢印で移動、Enter でメモモード切替ができます。</p>
-        <div class="stats" id="stats">ヒント使用: 0回 / 解答表示: なし</div>
+        <p class="hint-text">キーボードの 1-9 / Delete / Backspace に加え、矢印で移動、Enter でメモモード切替ができます。メモ中は右クリックで赤字にできます。</p>
+        <div class="stats" id="stats"></div>
         <div class="status" id="status">読み込み中...</div>
       </div>
     </div>
@@ -279,6 +303,7 @@
     const statusEl = document.getElementById('status');
     const statsEl = document.getElementById('stats');
     const timerEl = document.getElementById('timer');
+    const clearEl = document.getElementById('clear');
     let noteToggleEl = null;
     const undoEl = document.getElementById('undo');
     const redoEl = document.getElementById('redo');
@@ -532,11 +557,6 @@
       noteToggleEl.className = 'pad-action';
       noteToggleEl.addEventListener('click', () => toggleNoteMode());
       padEl.appendChild(noteToggleEl);
-      const clearBtn = document.createElement('button');
-      clearBtn.textContent = '消去';
-      clearBtn.classList.add('secondary');
-      clearBtn.addEventListener('click', () => applyValue(0));
-      padEl.appendChild(clearBtn);
     }
 
     function ensureNotes() {
@@ -705,7 +725,7 @@
       const solutionText = `解答表示: ${solutionRevealed ? 'あり' : 'なし'}`;
       const clueText = `選択ヒント数: ${selectedClueCount}`;
       const seedText = `シード: ${selectedSeedDisplay}`;
-      statsEl.textContent = `${hintText} / ${solutionText} / ${clueText} / ${seedText}`;
+      statsEl.innerHTML = `<ul class="stats-list"><li>${hintText}</li><li>${solutionText}</li><li>${clueText}</li><li>${seedText}</li></ul>`;
     }
 
     function updateStatus() {
@@ -872,6 +892,7 @@
     document.getElementById('reset').addEventListener('click', () => resetBoard(true, true));
     document.getElementById('hint').addEventListener('click', revealHint);
     document.getElementById('solve').addEventListener('click', showSolution);
+    clearEl.addEventListener('click', () => applyValue(0));
     undoEl.addEventListener('click', undoAction);
     redoEl.addEventListener('click', redoAction);
     document.addEventListener('keydown', handleKey);
