@@ -183,6 +183,12 @@
       margin-bottom: 12px;
       font-size: 18px;
     }
+    .pad-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: stretch;
+    }
     .pad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -279,7 +285,10 @@
       <div class="board" id="board" aria-label="数独盤面"></div>
       <div class="panel">
         <h2>数字パッド</h2>
-        <div class="pad" id="pad"></div>
+        <div class="pad-row">
+          <div class="pad" id="pad"></div>
+          <button class="ghost pad-clear" id="clear">消去</button>
+        </div>
         <div class="controls">
           <button class="ghost" id="undo">↩️ １つ戻す</button>
           <button class="ghost" id="redo">↪️ １つ進める</button>
