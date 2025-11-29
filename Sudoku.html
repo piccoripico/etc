@@ -192,55 +192,28 @@
     .pad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      grid-template-rows: repeat(4, minmax(0, 1fr));
+      grid-template-rows: repeat(4, 1fr);
       gap: 10px;
     }
-    .pad > * {
+    .pad button,
+    .pad .pad-action,
+    .pad .pad-spacer {
       width: 100%;
-      min-height: 64px;
+      height: 64px;
+      border-radius: 10px;
+    }
+    .pad button,
+    .pad .pad-action {
+      padding: 12px 0;
     }
     .pad button {
-      padding: 12px 0;
       font-size: 20px;
-      border-radius: 10px;
-      height: 100%;
-    }
-    .pad .pad-action {
-      padding: 12px 0;
-      font-size: 18px;
-      border-radius: 10px;
       display: flex;
-      justify-content: center;
       align-items: center;
-      gap: 4px;
-      background: #f8fafc;
-      border: 1px solid var(--line);
-      white-space: nowrap;
-      height: 100%;
-    }
-    .pad .pad-action.active {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 2px rgba(20,184,166,0.2);
-      font-weight: 700;
-    }
-    .pad .pad-action.memo-toggle { flex-direction: column; }
-    .pad .pad-action .memo-status {
-      font-size: 12px;
-      line-height: 1.1;
-      color: var(--accent);
-      visibility: hidden;
-      height: 14px;
-    }
-    .pad .pad-action .memo-status.visible { visibility: visible; }
-    .pad-spacer {
-      visibility: hidden;
-      border-radius: 10px;
-      height: 100%;
+      justify-content: center;
     }
     .pad .pad-action {
-      padding: 12px 0;
       font-size: 18px;
-      border-radius: 10px;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -599,13 +572,13 @@
       noteToggleEl.addEventListener('click', () => toggleNoteMode());
       padEl.appendChild(noteToggleEl);
 
-      const spacerLeft = document.createElement('div');
-      spacerLeft.className = 'pad-spacer';
-      padEl.appendChild(spacerLeft);
+      const spacer = document.createElement('div');
+      spacer.className = 'pad-spacer';
+      padEl.appendChild(spacer);
 
-      const spacerRight = document.createElement('div');
-      spacerRight.className = 'pad-spacer';
-      padEl.appendChild(spacerRight);
+      const endSpacer = document.createElement('div');
+      endSpacer.className = 'pad-spacer';
+      padEl.appendChild(endSpacer);
     }
 
     function ensureNotes() {
