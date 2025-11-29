@@ -192,6 +192,7 @@
     .pad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(4, 1fr);
       gap: 10px;
     }
     .pad button {
@@ -206,7 +207,7 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       background: #f8fafc;
       border: 1px solid var(--line);
       white-space: nowrap;
@@ -216,14 +217,16 @@
       box-shadow: 0 0 0 2px rgba(20,184,166,0.2);
       font-weight: 700;
     }
-    .pad-clear {
-      height: 100%;
-      padding: 12px 16px;
-      font-size: 18px;
-      border-radius: 10px;
-      align-self: stretch;
-      background: #f1f5f9;
+    .pad .pad-action.memo-toggle { flex-direction: column; }
+    .pad .pad-action .memo-status {
+      font-size: 12px;
+      line-height: 1.1;
+      color: var(--accent);
+      visibility: hidden;
+      height: 14px;
     }
+    .pad .pad-action .memo-status.visible { visibility: visible; }
+    .pad-spacer { visibility: hidden; }
     .status {
       margin-top: 12px;
       font-weight: 600;
@@ -303,7 +306,6 @@
     const statusEl = document.getElementById('status');
     const statsEl = document.getElementById('stats');
     const timerEl = document.getElementById('timer');
-    const clearEl = document.getElementById('clear');
     let noteToggleEl = null;
     const undoEl = document.getElementById('undo');
     const redoEl = document.getElementById('redo');
@@ -491,7 +493,8 @@
       }
       if (noteToggleEl) {
         noteToggleEl.classList.toggle('active', noteMode);
-        noteToggleEl.textContent = noteMode ? '✏️ メモ中' : '✏️ メモ';
+        const status = noteToggleEl.querySelector('.memo-status');
+        if (status) status.classList.toggle('visible', noteMode);
       }
     }
 
@@ -553,10 +556,22 @@
         padEl.appendChild(btn);
       }
       noteToggleEl = document.createElement('button');
-      noteToggleEl.textContent = '✏️ メモ';
-      noteToggleEl.className = 'pad-action';
+      noteToggleEl.type = 'button';
+      noteToggleEl.className = 'pad-action memo-toggle';
+      noteToggleEl.innerHTML = '<span class="memo-label">✏️ メモ</span><span class="memo-status" aria-live="polite">メモ中</span>';
       noteToggleEl.addEventListener('click', () => toggleNoteMode());
       padEl.appendChild(noteToggleEl);
+
+      const spacer = document.createElement('div');
+      spacer.className = 'pad-spacer';
+      padEl.appendChild(spacer);
+
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'pad-action pad-clear';
+      clearBtn.textContent = '消去';
+      clearBtn.addEventListener('click', () => applyValue(0));
+      padEl.appendChild(clearBtn);
     }
 
     function ensureNotes() {
@@ -892,7 +907,6 @@
     document.getElementById('reset').addEventListener('click', () => resetBoard(true, true));
     document.getElementById('hint').addEventListener('click', revealHint);
     document.getElementById('solve').addEventListener('click', showSolution);
-    clearEl.addEventListener('click', () => applyValue(0));
     undoEl.addEventListener('click', undoAction);
     redoEl.addEventListener('click', redoAction);
     document.addEventListener('keydown', handleKey);
