@@ -193,6 +193,22 @@
       font-size: 20px;
       border-radius: 10px;
     }
+    .pad .pad-action {
+      padding: 12px 0;
+      font-size: 18px;
+      border-radius: 10px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 6px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+    }
+    .pad .pad-action.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(20,184,166,0.2);
+      font-weight: 700;
+    }
     .status {
       margin-top: 12px;
       font-weight: 600;
@@ -247,7 +263,6 @@
         <h2>数字パッド</h2>
         <div class="pad" id="pad"></div>
         <div class="controls">
-          <button class="toggle" id="noteToggle">✏️ メモ</button>
           <button class="ghost" id="undo">↩️ １つ戻す</button>
           <button class="ghost" id="redo">↪️ １つ進める</button>
         </div>
@@ -264,7 +279,7 @@
     const statusEl = document.getElementById('status');
     const statsEl = document.getElementById('stats');
     const timerEl = document.getElementById('timer');
-    const noteToggleEl = document.getElementById('noteToggle');
+    let noteToggleEl = null;
     const undoEl = document.getElementById('undo');
     const redoEl = document.getElementById('redo');
     let puzzle = [];
@@ -449,8 +464,10 @@
       } else {
         noteMode = !noteMode;
       }
-      noteToggleEl.classList.toggle('active', noteMode);
-      noteToggleEl.textContent = noteMode ? '✏️ メモ中' : '✏️ メモ';
+      if (noteToggleEl) {
+        noteToggleEl.classList.toggle('active', noteMode);
+        noteToggleEl.textContent = noteMode ? '✏️ メモ中' : '✏️ メモ';
+      }
     }
 
     function startTimer() {
@@ -510,6 +527,11 @@
         });
         padEl.appendChild(btn);
       }
+      noteToggleEl = document.createElement('button');
+      noteToggleEl.textContent = '✏️ メモ';
+      noteToggleEl.className = 'pad-action';
+      noteToggleEl.addEventListener('click', () => toggleNoteMode());
+      padEl.appendChild(noteToggleEl);
       const clearBtn = document.createElement('button');
       clearBtn.textContent = '消去';
       clearBtn.classList.add('secondary');
@@ -701,7 +723,7 @@
         }
         setStatus(`おめでとうございます！すべて正解です。（タイム: ${formatTime(solvedAt - timerStart)}）`, 'success');
       } else {
-        setStatus('数字を入力してください。ヒント・メモ・Undo/Redo を活用できます。');
+        setStatus('数字を入力してください。');
       }
     }
 
@@ -733,14 +755,17 @@
 
     function loadNewPuzzle() {
       const clues = Number(document.getElementById('clueCount').value);
-      const seedValue = document.getElementById('seed').value.trim();
+      const seedInput = document.getElementById('seed');
+      const seedValueRaw = seedInput.value.trim();
+      const seedWasRandom = seedValueRaw === '';
+      const seedValue = seedWasRandom ? Math.floor(Math.random() * 1_000_000_000).toString() : seedValueRaw;
       setStatus('生成中...');
 
       const { puzzleBoard, solutionBoard } = generatePuzzle(clues, seedValue);
       puzzle = puzzleBoard;
       solution = solutionBoard;
       selectedClueCount = clues;
-      selectedSeedDisplay = seedValue === '' ? 'ランダム' : seedValue;
+      selectedSeedDisplay = seedWasRandom ? `ランダム(${seedValue})` : seedValue;
       solutionDigitMap = new Map();
       for (let num = 1; num <= 9; num++) solutionDigitMap.set(num, []);
       givens = new Set();
@@ -847,7 +872,6 @@
     document.getElementById('reset').addEventListener('click', () => resetBoard(true, true));
     document.getElementById('hint').addEventListener('click', revealHint);
     document.getElementById('solve').addEventListener('click', showSolution);
-    noteToggleEl.addEventListener('click', () => toggleNoteMode());
     undoEl.addEventListener('click', undoAction);
     redoEl.addEventListener('click', redoAction);
     document.addEventListener('keydown', handleKey);
