@@ -150,11 +150,12 @@
       padding: 6px;
       box-sizing: border-box;
       color: #475569;
-      font-size: 10px;
+      font-size: 12px;
       text-align: center;
-      line-height: 1.2;
+      line-height: 1.3;
     }
     .cell .notes span { display: block; min-height: 10px; }
+    .cell .notes span.highlighted { color: var(--error); font-weight: 700; }
 
     .controls {
       display: flex;
@@ -185,13 +186,51 @@
     .pad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(4, 1fr);
       gap: 10px;
     }
-    .pad button {
-      padding: 12px 0;
-      font-size: 20px;
+    .pad button,
+    .pad .pad-action,
+    .pad .pad-spacer {
+      width: 100%;
+      height: 64px;
       border-radius: 10px;
     }
+    .pad button,
+    .pad .pad-action {
+      padding: 12px 0;
+    }
+    .pad button {
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .pad .pad-action {
+      font-size: 18px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 4px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    .pad .pad-action.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(20,184,166,0.2);
+      font-weight: 700;
+    }
+    .pad .pad-action.memo-toggle { flex-direction: column; }
+    .pad .pad-action .memo-status {
+      font-size: 12px;
+      line-height: 1.1;
+      color: var(--accent);
+      visibility: hidden;
+      height: 14px;
+    }
+    .pad .pad-action .memo-status.visible { visibility: visible; }
+    .pad-spacer { visibility: hidden; }
     .status {
       margin-top: 12px;
       font-weight: 600;
@@ -199,6 +238,17 @@
     }
     .status.success { color: #15803d; }
     .status.warning { color: var(--error); }
+    .stats {
+      margin-top: 8px;
+      color: #475569;
+      font-size: 14px;
+    }
+    .stats-list {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 4px;
+    }
     .actions {
       display: flex;
       flex-wrap: wrap;
@@ -241,11 +291,11 @@
         <h2>数字パッド</h2>
         <div class="pad" id="pad"></div>
         <div class="controls">
-          <button class="toggle" id="noteToggle">✏️ メモ</button>
           <button class="ghost" id="undo">↩️ １つ戻す</button>
           <button class="ghost" id="redo">↪️ １つ進める</button>
         </div>
-        <p class="hint-text">キーボードの 1-9 / Delete / Backspace に加え、矢印で移動、Enter でメモモード切替ができます。</p>
+        <p class="hint-text">キーボードの 1-9 / Delete / Backspace に加え、矢印で移動、Enter でメモモード切替ができます。メモ中は右クリックで赤字にできます。</p>
+        <div class="stats" id="stats"></div>
         <div class="status" id="status">読み込み中...</div>
       </div>
     </div>
@@ -255,8 +305,9 @@
     const boardEl = document.getElementById('board');
     const padEl = document.getElementById('pad');
     const statusEl = document.getElementById('status');
+    const statsEl = document.getElementById('stats');
     const timerEl = document.getElementById('timer');
-    const noteToggleEl = document.getElementById('noteToggle');
+    let noteToggleEl = null;
     const undoEl = document.getElementById('undo');
     const redoEl = document.getElementById('redo');
     let puzzle = [];
@@ -272,6 +323,10 @@
     let timerStart = null;
     let timerInterval = null;
     let solvedAt = null;
+    let hintCount = 0;
+    let solutionRevealed = false;
+    let selectedClueCount = 32;
+    let selectedSeedDisplay = 'ランダム';
 
     function createRng(seedInput) {
       if (seedInput === '' || seedInput === null || seedInput === undefined) return Math.random;
@@ -415,7 +470,7 @@
     }
 
     function cloneNotes(notesBoard) {
-      return notesBoard.map(row => row.map(set => new Set(set)));
+      return notesBoard.map(row => row.map(noteMap => new Map(noteMap)));
     }
 
     function recordStateForUndo() {
@@ -437,8 +492,11 @@
       } else {
         noteMode = !noteMode;
       }
-      noteToggleEl.classList.toggle('active', noteMode);
-      noteToggleEl.textContent = noteMode ? '✏️ メモ中' : '✏️ メモ';
+      if (noteToggleEl) {
+        noteToggleEl.classList.toggle('active', noteMode);
+        const status = noteToggleEl.querySelector('.memo-status');
+        if (status) status.classList.toggle('visible', noteMode);
+      }
     }
 
     function startTimer() {
@@ -492,17 +550,26 @@
         btn.textContent = i;
         btn.className = 'num';
         btn.addEventListener('click', () => applyValue(i));
+        btn.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          applyValue(i, { highlightNote: true });
+        });
         padEl.appendChild(btn);
       }
-      const clearBtn = document.createElement('button');
-      clearBtn.textContent = '消去';
-      clearBtn.classList.add('secondary');
-      clearBtn.addEventListener('click', () => applyValue(0));
-      padEl.appendChild(clearBtn);
+      noteToggleEl = document.createElement('button');
+      noteToggleEl.type = 'button';
+      noteToggleEl.className = 'pad-action memo-toggle';
+      noteToggleEl.innerHTML = '<span class="memo-label">✏️ メモ</span><span class="memo-status" aria-live="polite">メモ中</span>';
+      noteToggleEl.addEventListener('click', () => toggleNoteMode());
+      padEl.appendChild(noteToggleEl);
+
+      const spacer = document.createElement('div');
+      spacer.className = 'pad-spacer';
+      padEl.appendChild(spacer);
     }
 
     function ensureNotes() {
-      notes = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => new Set()));
+      notes = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => new Map()));
     }
 
     function selectCell(cell) {
@@ -513,26 +580,45 @@
       selected.classList.add('selected');
     }
 
-    function applyValue(value) {
+    function applyValue(value, options = {}) {
+      const { highlightNote = false } = options;
       if (!selected) return;
       const r = Number(selected.dataset.row);
       const c = Number(selected.dataset.col);
       if (givens.has(cellKey(r, c))) return;
 
-      recordStateForUndo();
+      if (highlightNote && !noteMode) {
+        return applyValue(value, { highlightNote: false });
+      }
 
       if (noteMode) {
+        const noteMap = notes[r][c];
         if (value === 0) {
-          notes[r][c].clear();
+          if (!noteMap.size) return;
+          recordStateForUndo();
+          noteMap.clear();
+        } else if (highlightNote) {
+          const existing = noteMap.get(value);
+          const newHighlighted = !(existing && existing.highlighted);
+          if (existing && existing.highlighted === newHighlighted) return;
+          recordStateForUndo();
+          noteMap.set(value, { highlighted: newHighlighted });
         } else {
-          if (notes[r][c].has(value)) {
-            notes[r][c].delete(value);
+          const existing = noteMap.get(value);
+          if (existing) {
+            recordStateForUndo();
+            noteMap.delete(value);
           } else {
-            notes[r][c].add(value);
+            recordStateForUndo();
+            noteMap.set(value, { highlighted: false });
           }
         }
       } else {
-        current[r][c] = value;
+        const currentValue = current[r][c];
+        const nextValue = value === currentValue ? 0 : value;
+        if (nextValue === currentValue) return;
+        recordStateForUndo();
+        current[r][c] = nextValue;
         notes[r][c].clear();
       }
 
@@ -608,13 +694,19 @@
       if (value) {
         cell.textContent = value;
       } else {
-        const noteVals = Array.from(notes[r][c]).sort((a, b) => a - b);
-        if (noteVals.length) {
+        const noteMap = notes[r][c];
+        if (noteMap.size) {
           const notesGrid = document.createElement('div');
           notesGrid.className = 'notes';
           for (let i = 1; i <= 9; i++) {
             const span = document.createElement('span');
-            span.textContent = noteVals.includes(i) ? i : '';
+            const entry = noteMap.get(i);
+            if (entry) {
+              span.textContent = i;
+              if (entry.highlighted) {
+                span.classList.add('highlighted');
+              }
+            }
             notesGrid.appendChild(span);
           }
           cell.appendChild(notesGrid);
@@ -637,6 +729,14 @@
       statusEl.className = `status ${type}`;
     }
 
+    function updateStats() {
+      const hintText = `ヒント使用: ${hintCount}回`;
+      const solutionText = `解答表示: ${solutionRevealed ? 'あり' : 'なし'}`;
+      const clueText = `選択ヒント数: ${selectedClueCount}`;
+      const seedText = `シード: ${selectedSeedDisplay}`;
+      statsEl.innerHTML = `<ul class="stats-list"><li>${hintText}</li><li>${solutionText}</li><li>${clueText}</li><li>${seedText}</li></ul>`;
+    }
+
     function updateStatus() {
       let filled = true;
       for (let r = 0; r < 9; r++) {
@@ -652,7 +752,7 @@
         }
         setStatus(`おめでとうございます！すべて正解です。（タイム: ${formatTime(solvedAt - timerStart)}）`, 'success');
       } else {
-        setStatus('数字を入力してください。ヒント・メモ・Undo/Redo を活用できます。');
+        setStatus('数字を入力してください。');
       }
     }
 
@@ -670,23 +770,31 @@
       current = cloneBoard(puzzle);
       ensureNotes();
       solvedAt = null;
+      hintCount = 0;
+      solutionRevealed = false;
       if (restartTimer) {
         startTimer();
       } else {
         updateTimerDisplay();
       }
       renderBoard();
+      updateStats();
       updateStatus();
     }
 
     function loadNewPuzzle() {
       const clues = Number(document.getElementById('clueCount').value);
-      const seedValue = document.getElementById('seed').value.trim();
+      const seedInput = document.getElementById('seed');
+      const seedValueRaw = seedInput.value.trim();
+      const seedWasRandom = seedValueRaw === '';
+      const seedValue = seedWasRandom ? Math.floor(Math.random() * 1_000_000_000).toString() : seedValueRaw;
       setStatus('生成中...');
 
       const { puzzleBoard, solutionBoard } = generatePuzzle(clues, seedValue);
       puzzle = puzzleBoard;
       solution = solutionBoard;
+      selectedClueCount = clues;
+      selectedSeedDisplay = seedWasRandom ? `ランダム(${seedValue})` : seedValue;
       solutionDigitMap = new Map();
       for (let num = 1; num <= 9; num++) solutionDigitMap.set(num, []);
       givens = new Set();
@@ -699,9 +807,12 @@
       }
       history = [];
       future = [];
+      hintCount = 0;
+      solutionRevealed = false;
       ensureNotes();
       current = cloneBoard(puzzle);
       renderBoard();
+      updateStats();
       updateStatus();
       selected = boardEl.firstChild;
       if (selected) selectCell(selected);
@@ -751,6 +862,8 @@
             notes[r][c].clear();
             renderBoard();
             updateStatus();
+            hintCount += 1;
+            updateStats();
             return;
           }
         }
@@ -765,6 +878,8 @@
       renderBoard();
       solvedAt = Date.now();
       stopTimer(true);
+      solutionRevealed = true;
+      updateStats();
       setStatus('解答を表示しました。', 'success');
     }
 
@@ -786,7 +901,6 @@
     document.getElementById('reset').addEventListener('click', () => resetBoard(true, true));
     document.getElementById('hint').addEventListener('click', revealHint);
     document.getElementById('solve').addEventListener('click', showSolution);
-    noteToggleEl.addEventListener('click', () => toggleNoteMode());
     undoEl.addEventListener('click', undoAction);
     redoEl.addEventListener('click', redoAction);
     document.addEventListener('keydown', handleKey);
