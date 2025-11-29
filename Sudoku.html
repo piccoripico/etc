@@ -183,6 +183,12 @@
       margin-bottom: 12px;
       font-size: 18px;
     }
+    .pad-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: stretch;
+    }
     .pad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -231,6 +237,33 @@
       border-radius: 10px;
       height: 100%;
     }
+    .pad .pad-action {
+      padding: 12px 0;
+      font-size: 18px;
+      border-radius: 10px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 4px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    .pad .pad-action.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(20,184,166,0.2);
+      font-weight: 700;
+    }
+    .pad .pad-action.memo-toggle { flex-direction: column; }
+    .pad .pad-action .memo-status {
+      font-size: 12px;
+      line-height: 1.1;
+      color: var(--accent);
+      visibility: hidden;
+      height: 14px;
+    }
+    .pad .pad-action .memo-status.visible { visibility: visible; }
+    .pad-spacer { visibility: hidden; }
     .status {
       margin-top: 12px;
       font-weight: 600;
@@ -289,7 +322,10 @@
       <div class="board" id="board" aria-label="数独盤面"></div>
       <div class="panel">
         <h2>数字パッド</h2>
-        <div class="pad" id="pad"></div>
+        <div class="pad-row">
+          <div class="pad" id="pad"></div>
+          <button class="ghost pad-clear" id="clear">消去</button>
+        </div>
         <div class="controls">
           <button class="ghost" id="undo">↩️ １つ戻す</button>
           <button class="ghost" id="redo">↪️ １つ進める</button>
